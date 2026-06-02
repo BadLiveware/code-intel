@@ -15,8 +15,19 @@ Build the standalone CLI once from the source checkout:
 
 ```bash
 cd /path/to/code-intel
+npm install
 npm run build
 ```
+
+If you want Claude to launch the short `code-intel` command, link or install the package so the command resolves on `PATH`:
+
+```bash
+npm link
+command -v code-intel
+code-intel list
+```
+
+If `command -v code-intel` prints nothing, Claude will report `ENOENT` when it tries to spawn the MCP server. Use the absolute built entrypoint path below, or link/install the package first.
 
 Create an MCP config file that launches the built standalone entrypoint. This one-off config pins the target repo because it may be used from outside that repo:
 
@@ -55,7 +66,7 @@ claude mcp add -s project code-intel -- \
   mcp
 ```
 
-Add `--cwd /path/to/repo` only for a deliberately pinned local/user config that should always inspect that one repository, regardless of where Claude Code is launched.
+Add `--cwd /path/to/repo` only for a deliberately pinned local/user config that should always inspect that one repository, regardless of where Claude Code is launched. If you have not linked or installed the `code-intel` bin, use the absolute `/path/to/code-intel/dist/standalone/cli.js` command in this setup.
 
 ## Available tools
 
@@ -123,5 +134,7 @@ The package declares a `code-intel` bin backed by `dist/standalone/cli.js`. Afte
 cd /path/to/repo
 claude mcp add -s project code-intel -- code-intel mcp
 ```
+
+This shortened form assumes `command -v code-intel` succeeds. If it does not, link/install the package or use the absolute built entrypoint path.
 
 For source-only debugging, the TypeScript entrypoint still works with `node --experimental-strip-types`, but the built bin is the preferred normal-use path.

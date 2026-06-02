@@ -14,6 +14,16 @@ npm install
 npm run build
 ```
 
+If a Claude MCP config uses the short `code-intel` command, make the local checkout available on `PATH` first:
+
+```bash
+npm link
+command -v code-intel
+code-intel list
+```
+
+Alternatively, configure Claude with the absolute built entrypoint path shown below.
+
 The normal executable entrypoint is the built bin:
 
 ```bash
@@ -35,7 +45,7 @@ The TypeScript source entrypoint can still be run with `node --experimental-stri
 
 ## Claude Code MCP setup
 
-After building and linking/installing the package, add code-intel from the repository you want Claude Code to inspect:
+After building and linking/installing the package, add code-intel from the repository you want Claude Code to inspect. The short command requires `command -v code-intel` to succeed; otherwise use the absolute `dist/standalone/cli.js` path from [docs/claude-code-mcp.md](docs/claude-code-mcp.md).
 
 ```bash
 cd /path/to/repo
