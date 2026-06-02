@@ -69,12 +69,12 @@ The MCP server exposes read-only tools by default:
 - `code_intel_read_symbol`
 - `code_intel_post_edit_map`
 
-Mutation tools are hidden unless the server starts with `--enable-mutations`:
+Mutation tools are opt-in and appear when the server starts with `--enable-mutations`:
 
 - `code_intel_replace_symbol`
 - `code_intel_insert_relative`
 
-Keep mutations disabled for normal Claude Code use. Claude Code already has edit tools, while code-intel's main value is routing to relevant source and returning stable symbol targets/read hints.
+Enable them when a Claude Code workflow should use code-intel's symbol-aware edit path. These tools complement generic edit tools by consuming stable symbol targets plus hash/text safety evidence, relocating stale anchors, and applying declaration-sized replacements or insertions without reconstructing line ranges by hand. Leave them disabled only when the MCP client should be read-only.
 
 ## Path behavior
 

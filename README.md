@@ -56,12 +56,12 @@ Read-only tools are exposed by default:
 - `code_intel_read_symbol`
 - `code_intel_post_edit_map`
 
-Mutation tools are hidden unless `--enable-mutations` is passed:
+Mutation tools are opt-in and appear when `--enable-mutations` is passed:
 
 - `code_intel_replace_symbol`
 - `code_intel_insert_relative`
 
-Keep mutations disabled for ordinary Claude Code use; Claude Code already has edit tools, while code-intel is primarily a routing and source-context helper.
+Enable them when you want symbol-aware edits that consume code-intel targets and hash/text safety evidence. They complement generic edit tools by avoiding manual line-range reconstruction, relocating stale symbol targets, and keeping declaration-sized replacements or insertions anchored to parsed source. Leave them disabled only when the MCP client should be read-only.
 
 ## Path behavior
 
