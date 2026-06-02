@@ -2,18 +2,28 @@
   "name": "code-intel",
   "version": "0.1.0",
   "description": "Standalone code-intelligence CLI and MCP server for source routing, impact maps, outlines, and symbol reads.",
-  "private": true,
   "type": "module",
   "license": "MIT",
+  "author": "BadLiveware",
   "keywords": [
     "mcp",
     "code-intelligence",
     "claude-code",
     "source-analysis"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BadLiveware/code-intel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BadLiveware/code-intel/issues"
+  },
+  "homepage": "https://github.com/BadLiveware/code-intel#readme",
   "files": [
     "README.md",
     "LICENSE",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
     "dist",
     "docs",
     "package.json"

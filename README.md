@@ -1,5 +1,8 @@
 # code-intel
 
+[![CI](https://github.com/BadLiveware/code-intel/actions/workflows/ci.yml/badge.svg)](https://github.com/BadLiveware/code-intel/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Standalone code-intelligence CLI and MCP server for source routing, impact maps, file outlines, syntax search, and bounded symbol reads.
 
 The package is designed for agent harnesses such as Claude Code that need a read-next helper without loading the Pi extension runtime.
@@ -103,3 +106,9 @@ npm run ci
 ```
 
 CI runs on Node.js 24 because the source test suite uses Node's built-in test runner with `node --experimental-strip-types` for TypeScript test files. The built CLI/MCP path is validated by `npm run build`, `npm run smoke:cli`, and `npm run pack:dry-run`.
+
+## Project policy
+
+- License: [MIT](LICENSE)
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Security reports: [SECURITY.md](SECURITY.md)
