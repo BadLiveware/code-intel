@@ -1,0 +1,6 @@
+* text=auto eol=lf
+
+*.md diff=markdown
+*.ts diff=typescript
+*.json text eol=lf
+*.lock text eol=lf
