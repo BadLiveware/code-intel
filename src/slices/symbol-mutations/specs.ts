@@ -23,7 +23,7 @@ const selectorProperties = {
 export const replaceSymbolToolSpec: CodeIntelToolSpec<CodeIntelReplaceSymbolParams> = {
 	name: "code_intel_replace_symbol",
 	title: "Code Intelligence Replace Symbol",
-	description: "Replace the current text of a resolved symbolTarget after verifying oldText or oldHash safety evidence. Disabled in standalone mode unless mutations are explicitly enabled.",
+	description: "Replace the current text of a resolved symbolTarget after verifying oldText or oldHash safety evidence.",
 	promptSnippet: "Use when you already have a code-intel symbolTarget and need to replace that exact declaration without reconstructing line numbers after edits.",
 	promptGuidelines: [
 		"Prefer code_intel_replace_symbol for declaration-sized replacements when you have a symbolTarget from code_intel_read_symbol or code_intel_file_outline.",
@@ -51,7 +51,7 @@ export const replaceSymbolToolSpec: CodeIntelToolSpec<CodeIntelReplaceSymbolPara
 export const insertRelativeToolSpec: CodeIntelToolSpec<CodeIntelInsertRelativeParams> = {
 	name: "code_intel_insert_relative",
 	title: "Code Intelligence Insert Relative",
-	description: "Insert text before or after a resolved symbolTarget anchor, using the same stale-target resolution as read_symbol. Disabled in standalone mode unless mutations are explicitly enabled.",
+	description: "Insert text before or after a resolved symbolTarget anchor, using the same stale-target resolution as read_symbol.",
 	promptSnippet: "Use with a symbolTarget from file outline or read_symbol to add a declaration before/after an existing symbol without reading the whole file.",
 	promptGuidelines: [
 		"Prefer code_intel_insert_relative for adding declarations or sections next to a resolved anchor from code_intel_file_outline or code_intel_read_symbol.",
