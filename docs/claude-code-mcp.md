@@ -7,7 +7,7 @@ Run code-intelligence as a Claude Code MCP server when another harness needs Pi'
 - Claude Code CLI on `PATH` (`claude --version`).
 - Node.js 20 or newer.
 - Dependencies installed in this package (`npm install`).
-- A repository path to use as the code-intel working directory.
+- A target repository. For project-scoped MCP setup, run the add command from that repository root. Use `--cwd` only when intentionally pinning the server to a repo path.
 
 ## Source checkout configuration
 
@@ -18,7 +18,7 @@ cd /path/to/code-intel
 npm run build
 ```
 
-Create an MCP config file that launches the built standalone entrypoint:
+Create an MCP config file that launches the built standalone entrypoint. This one-off config pins the target repo because it may be used from outside that repo:
 
 ```json
 {
@@ -46,13 +46,16 @@ claude -p \
   'Use code-intel to outline src/index.ts before deciding what source to read next.'
 ```
 
-For persistent configuration, use Claude Code's project or user MCP commands instead of `--mcp-config`:
+For persistent project configuration, run Claude Code's MCP command from the repository that code-intel should inspect and omit `--cwd`:
 
 ```bash
-claude mcp add code-intel -- \
+cd /path/to/repo
+claude mcp add -s project code-intel -- \
   /path/to/code-intel/dist/standalone/cli.js \
-  mcp --cwd /path/to/repo
+  mcp
 ```
+
+Add `--cwd /path/to/repo` only for a deliberately pinned local/user config that should always inspect that one repository, regardless of where Claude Code is launched.
 
 ## Available tools
 
@@ -78,7 +81,7 @@ Enable them when a Claude Code workflow should use code-intel's symbol-aware edi
 
 ## Path behavior
 
-`--cwd` sets the process working directory. The standalone server defaults to `--path-base auto`, which accepts either repo-root-relative paths or cwd-relative paths for tool fields such as `path`, `paths`, `changedFiles`, and `testPaths`.
+`--cwd` overrides the server working directory when the MCP client launches code-intel from somewhere other than the target repo. If omitted, code-intel uses the process working directory. The standalone server defaults to `--path-base auto`, which accepts either repo-root-relative paths or cwd-relative paths for tool fields such as `path`, `paths`, `changedFiles`, and `testPaths`.
 
 Examples:
 
@@ -88,7 +91,7 @@ Examples:
 {"changedFiles":["src/tool-registry.ts"]}
 ```
 
-In `auto` mode, code-intel first tries the input as repo-root-relative when that file exists; otherwise it resolves the path relative to `--cwd`. Use `--path-base repo` to force repo-root-relative behavior, or `--path-base cwd` to force cwd-relative behavior.
+In `auto` mode, code-intel first tries the input as repo-root-relative when that file exists; otherwise it resolves the path relative to the server working directory. Use `--path-base repo` to force repo-root-relative behavior, or `--path-base cwd` to force cwd-relative behavior.
 
 Claude Code cannot currently supply Pi's session-tracked touched files. For `code_intel_post_edit_map`, pass `changedFiles` or `baseRef` explicitly.
 
@@ -114,10 +117,11 @@ Expected evidence:
 
 ## Installed package shape
 
-The package declares a `code-intel` bin backed by `dist/standalone/cli.js`. After `npm run build` and package linking/installation, the MCP command can be shortened to:
+The package declares a `code-intel` bin backed by `dist/standalone/cli.js`. After `npm run build` and package linking/installation, the project-scoped MCP command can be shortened to:
 
 ```bash
-claude mcp add code-intel -- code-intel mcp --cwd /path/to/repo
+cd /path/to/repo
+claude mcp add -s project code-intel -- code-intel mcp
 ```
 
 For source-only debugging, the TypeScript entrypoint still works with `node --experimental-strip-types`, but the built bin is the preferred normal-use path.

@@ -19,25 +19,30 @@ The normal executable entrypoint is the built bin:
 ```bash
 ./dist/standalone/cli.js list
 ./dist/standalone/cli.js call code_intel_file_outline --cwd src --json '{"path":"tool-registry.ts","maxSymbols":5}'
-./dist/standalone/cli.js mcp --cwd /path/to/repo
+./dist/standalone/cli.js mcp
+./dist/standalone/cli.js mcp --cwd /path/to/repo  # optional pinned repo launch
 ```
 
 When linked or installed, use the short command:
 
 ```bash
 code-intel list
-code-intel mcp --cwd /path/to/repo
+code-intel mcp
+code-intel mcp --cwd /path/to/repo  # optional pinned repo launch
 ```
 
 The TypeScript source entrypoint can still be run with `node --experimental-strip-types` for local debugging, but normal CLI/MCP use should run the built JavaScript bin.
 
 ## Claude Code MCP setup
 
-After building and linking/installing the package:
+After building and linking/installing the package, add code-intel from the repository you want Claude Code to inspect:
 
 ```bash
-claude mcp add code-intel -- code-intel mcp --cwd /path/to/repo
+cd /path/to/repo
+claude mcp add -s project code-intel -- code-intel mcp
 ```
+
+`--cwd /path/to/repo` is only for a deliberately pinned server, such as a one-off config launched from outside the target repo. It is not a generic install-time value.
 
 For source-checkout configuration and smoke-test guidance, see [docs/claude-code-mcp.md](docs/claude-code-mcp.md).
 
@@ -65,9 +70,9 @@ Enable them when you want symbol-aware edits that consume code-intel targets and
 
 ## Path behavior
 
-`--cwd` sets the process working directory. The standalone server defaults to `--path-base auto`, which accepts either repo-root-relative paths or cwd-relative paths for tool fields such as `path`, `paths`, `changedFiles`, and `testPaths`.
+`--cwd` overrides the server working directory when the MCP client launches code-intel from somewhere other than the target repo. If omitted, code-intel uses the process working directory. The standalone server defaults to `--path-base auto`, which accepts either repo-root-relative paths or cwd-relative paths for tool fields such as `path`, `paths`, `changedFiles`, and `testPaths`.
 
-In `auto` mode, code-intel first tries the input as repo-root-relative when that file exists; otherwise it resolves the path relative to `--cwd`. Use `--path-base repo` or `--path-base cwd` to force one interpretation.
+In `auto` mode, code-intel first tries the input as repo-root-relative when that file exists; otherwise it resolves the path relative to the server working directory. Use `--path-base repo` or `--path-base cwd` to force one interpretation.
 
 ## Configuration
 
