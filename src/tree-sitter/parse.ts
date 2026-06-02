@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { LANGUAGE_SPECS, languageSpec, type LanguageSpec } from "../languages.ts";
@@ -6,6 +7,43 @@ import { parserFor } from "./loader.ts";
 import type { ParsedFile, ParserBundle, TreeSitterNode } from "./nodes.ts";
 
 const EXCLUDED_DIRS = new Set([".git", ".hg", ".svn", "node_modules", "vendor", "dist", "build", "target", ".cache"]);
+const PARSED_FILE_CACHE_MAX = 512;
+
+interface CachedParsedFile {
+	hash: string;
+	parsed: ParsedFile;
+}
+
+const parsedFileCache = new Map<string, CachedParsedFile>();
+
+function contentHash(source: string): string {
+	return createHash("sha256").update(source).digest("hex");
+}
+
+function cacheKey(repoRoot: string, absoluteFile: string, language: string): string {
+	return `${repoRoot}\0${absoluteFile}\0${language}`;
+}
+
+function rememberParsedFile(key: string, hash: string, parsed: ParsedFile): void {
+	parsedFileCache.set(key, { hash, parsed });
+	while (parsedFileCache.size > PARSED_FILE_CACHE_MAX) {
+		const oldest = parsedFileCache.keys().next().value;
+		if (!oldest) break;
+		parsedFileCache.delete(oldest);
+	}
+}
+
+function parseCurrentFile(repoRoot: string, absoluteFile: string, spec: LanguageSpec, bundle: ParserBundle): ParsedFile {
+	const source = fs.readFileSync(absoluteFile, "utf8");
+	const hash = contentHash(source);
+	const key = cacheKey(repoRoot, absoluteFile, spec.id);
+	const cached = parsedFileCache.get(key);
+	if (cached?.hash === hash) return cached.parsed;
+	const tree = bundle.parser.parse(source);
+	const parsed: ParsedFile = { file: repoRelative(repoRoot, absoluteFile), absoluteFile, source, contentHash: hash, language: spec.id, root: tree.rootNode as TreeSitterNode, bundle };
+	rememberParsedFile(key, hash, parsed);
+	return parsed;
+}
 
 function repoRelative(repoRoot: string, absoluteFile: string): string {
 	return path.relative(repoRoot, absoluteFile).split(path.sep).join(path.posix.sep);
@@ -80,9 +118,7 @@ export async function parseFiles(repoRoot: string, languages: string[], paths: s
 				return { parsedFiles, diagnostics, filesByLanguage, parsedByLanguage };
 			}
 			try {
-				const source = fs.readFileSync(absoluteFile, "utf8");
-				const tree = bundle.parser.parse(source);
-				parsedFiles.push({ file: repoRelative(repoRoot, absoluteFile), absoluteFile, source, language: spec.id, root: tree.rootNode as TreeSitterNode, bundle });
+				parsedFiles.push(parseCurrentFile(repoRoot, absoluteFile, spec, bundle));
 				parsedByLanguage[spec.id] = (parsedByLanguage[spec.id] ?? 0) + 1;
 			} catch (error) {
 				diagnostics.push(`${repoRelative(repoRoot, absoluteFile)}: ${error instanceof Error ? error.message : String(error)}`);
@@ -95,6 +131,7 @@ export async function parseFiles(repoRoot: string, languages: string[], paths: s
 export function readSourceFileAsParsed(repoRoot: string, file: string, language: string): ParsedFile {
 	const absoluteFile = path.resolve(repoRoot, file);
 	const source = fs.readFileSync(absoluteFile, "utf8");
+	const hash = contentHash(source);
 	const lines = source.split(/\r?\n/);
 	const root: TreeSitterNode = {
 		type: "source_file",
@@ -106,7 +143,7 @@ export function readSourceFileAsParsed(repoRoot: string, file: string, language:
 		namedChild: () => null,
 		childForFieldName: () => null,
 	};
-	return { file, absoluteFile, source, language, root, bundle: { parser: undefined, language: undefined, spec: { id: language, wasm: "", extensions: [] } } };
+	return { file, absoluteFile, source, contentHash: hash, language, root, bundle: { parser: undefined, language: undefined, spec: { id: language, wasm: "", extensions: [] } } };
 }
 
 export function languagesForSyntaxSearch(language: string | undefined, paths: string[]): string[] {

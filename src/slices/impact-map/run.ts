@@ -2,11 +2,42 @@ import type { CodeIntelConfig, CodeIntelImpactMapParams, ResultDetail } from "..
 import { changedFilesFromBase } from "../../repo.ts";
 import { runReferenceConfirmation } from "../../lsp/confirmation.ts";
 import { runTreeSitterImpact } from "../../tree-sitter.ts";
-import { normalizePositiveInteger, normalizeStringArray } from "../../util.ts";
+import { isRecord, normalizePositiveInteger, normalizeStringArray } from "../../util.ts";
 
 const IMPACT_DEFAULT_LOCATION_RESULTS = 125;
 const IMPACT_DEFAULT_SNIPPET_RESULTS = 25;
 const IMPACT_DEFAULT_MAX_ROOT_SYMBOLS = 20;
+
+function exactReferenceRows(referenceConfirmation: Record<string, unknown>): Record<string, unknown>[] {
+	const references = Array.isArray(referenceConfirmation.references) ? referenceConfirmation.references.filter(isRecord) : [];
+	return references.map((row) => ({
+		kind: "exact_reference",
+		name: typeof row.rootSymbol === "string" ? row.rootSymbol : "reference",
+		symbol: typeof row.rootSymbol === "string" ? row.rootSymbol : undefined,
+		rootSymbol: row.rootSymbol,
+		file: row.file,
+		line: row.line,
+		column: row.column,
+		endLine: row.endLine,
+		endColumn: row.endColumn,
+		language: "csharp",
+		evidence: row.evidence ?? referenceConfirmation.evidence ?? "csharp-ls:textDocument/references",
+		reason: `exact csharp-ls reference for ${String(row.rootSymbol ?? "selected root")}`,
+	}));
+}
+
+function mergeExactReferenceRows(output: Record<string, unknown>, exactRows: Record<string, unknown>[], maxResults: number): void {
+	if (exactRows.length === 0) return;
+	const existing = Array.isArray(output.related) ? output.related.filter(isRecord) : [];
+	const exactKeys = new Set(exactRows.map((row) => [row.file, row.line, row.column, row.rootSymbol].join("\0")));
+	const syntaxRows = existing.filter((row) => !exactKeys.has([row.file, row.line, row.column, row.rootSymbol].join("\0")));
+	output.exactRelated = exactRows;
+	output.related = [...exactRows, ...syntaxRows].slice(0, maxResults);
+	const summary = isRecord(output.summary) ? { ...output.summary } : {};
+	output.summary = { ...summary, exactReferenceCount: exactRows.length, basis: "csharpLsExactReferencesThenCurrentSourceSyntax" };
+	const coverage = isRecord(output.coverage) ? { ...output.coverage } : {};
+	output.coverage = { ...coverage, exactReferenceLane: "csharp-ls", exactReferenceRows: exactRows.length };
+}
 
 export async function runImpactMap(params: CodeIntelImpactMapParams, repoRoot: string, config: CodeIntelConfig, signal?: AbortSignal): Promise<Record<string, unknown>> {
 	const detail: ResultDetail = params.detail === "snippets" ? "snippets" : "locations";
@@ -24,7 +55,7 @@ export async function runImpactMap(params: CodeIntelImpactMapParams, repoRoot: s
 		diagnostics: [...diagnostics, ...(Array.isArray(payload.diagnostics) ? payload.diagnostics : [])],
 	};
 	if (params.confirmReferences === "gopls" || params.confirmReferences === "typescript" || params.confirmReferences === "clangd" || params.confirmReferences === "rust-analyzer" || params.confirmReferences === "csharp-ls" || params.confirmReferences === "pyrefly") {
-		output.referenceConfirmation = await runReferenceConfirmation(
+		const referenceConfirmation = await runReferenceConfirmation(
 			params.confirmReferences,
 			Array.isArray(output.roots) ? output.roots : [],
 			repoRoot,
@@ -32,6 +63,8 @@ export async function runImpactMap(params: CodeIntelImpactMapParams, repoRoot: s
 			config,
 			signal,
 		);
+		output.referenceConfirmation = referenceConfirmation;
+		if (params.confirmReferences === "csharp-ls") mergeExactReferenceRows(output, exactReferenceRows(referenceConfirmation), maxResults);
 	}
 	return output;
 }

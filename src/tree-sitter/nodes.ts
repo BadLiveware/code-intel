@@ -31,6 +31,7 @@ export interface ParsedFile {
 	file: string;
 	absoluteFile: string;
 	source: string;
+	contentHash?: string;
 	sourceLines?: string[];
 	language: string;
 	root: TreeSitterNode;

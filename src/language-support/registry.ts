@@ -106,7 +106,7 @@ export const LANGUAGE_CAPABILITIES: LanguageCapability[] = [
 		category: "source",
 		supportLevel: "parser",
 		features: features({ impact: "code", exactReferences: ["csharp-ls"], diagnostics: ["csharp-ls"] }),
-		limitations: ["C# routing is current-source syntax evidence by default; csharp-ls references and diagnostics are optional provider features."],
+		limitations: ["C# routing is current-source syntax evidence by default; csharp-ls references can be promoted into impact-map related rows when confirmReferences is requested, and diagnostics are optional provider features."],
 	},
 	{
 		id: "bash",

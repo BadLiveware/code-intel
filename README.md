@@ -86,6 +86,10 @@ In `auto` mode, code-intel first tries the input as repo-root-relative when that
 
 Broad scans respect git ignore rules by default using tracked plus unignored working-tree files. Explicit file paths remain inspectable even when ignored, and explicit ignored directories such as `obj/` can be scanned deliberately. Use `includeIgnored: true` on routing/search tools when generated outputs such as source-generator `.g.cs` files should be included in broad candidate discovery.
 
+Long-lived MCP sessions cache parsed files and extracted symbol records by current content hash. The server reads and hashes the file before reusing a cached entry, so edits invalidate cached parse/record data instead of returning stale source facts.
+
+For C# impact maps, `confirmReferences: "csharp-ls"` promotes exact csharp-ls reference rows into the returned `related` candidates before syntax-only rows, while preserving the separate `referenceConfirmation` details for diagnostics and coverage.
+
 ## Configuration
 
 Standalone config is loaded in this order:

@@ -24,8 +24,38 @@ const extractors: Record<string, LanguageExtractor> = {
 	markdown: extractMarkdownFileRecords,
 };
 
+const RECORD_CACHE_MAX = 1024;
+const recordCache = new Map<string, { definitions: SymbolRecord[]; candidates: SymbolRecord[] }>();
+
+function recordCacheKey(parsed: ParsedFile, detail: ResultDetail): string | undefined {
+	if (!parsed.contentHash) return undefined;
+	return `${parsed.absoluteFile}\0${parsed.language}\0${parsed.contentHash}\0${detail}`;
+}
+
+function cloneRecord(row: SymbolRecord): SymbolRecord {
+	return { ...row, metaVariables: row.metaVariables ? { ...row.metaVariables } : undefined };
+}
+
+function cloneRecords(records: { definitions: SymbolRecord[]; candidates: SymbolRecord[] }): { definitions: SymbolRecord[]; candidates: SymbolRecord[] } {
+	return { definitions: records.definitions.map(cloneRecord), candidates: records.candidates.map(cloneRecord) };
+}
+
+function rememberRecords(key: string, records: { definitions: SymbolRecord[]; candidates: SymbolRecord[] }): void {
+	recordCache.set(key, cloneRecords(records));
+	while (recordCache.size > RECORD_CACHE_MAX) {
+		const oldest = recordCache.keys().next().value;
+		if (!oldest) break;
+		recordCache.delete(oldest);
+	}
+}
+
 export function extractFileRecords(parsed: ParsedFile, detail: ResultDetail): { definitions: SymbolRecord[]; candidates: SymbolRecord[] } {
+	const key = recordCacheKey(parsed, detail);
+	const cached = key ? recordCache.get(key) : undefined;
+	if (cached) return cloneRecords(cached);
 	const extractorId = languageCapability(parsed.language)?.extractor ?? "generic";
 	const extractor = extractors[extractorId] ?? extractGenericFileRecords;
-	return extractor(parsed, detail);
+	const records = extractor(parsed, detail);
+	if (key) rememberRecords(key, records);
+	return cloneRecords(records);
 }
