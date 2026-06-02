@@ -1,0 +1,55 @@
+{
+  "name": "code-intel",
+  "version": "0.1.0",
+  "description": "Standalone code-intelligence CLI and MCP server for source routing, impact maps, outlines, and symbol reads.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "code-intelligence",
+    "claude-code",
+    "source-analysis"
+  ],
+  "files": [
+    "README.md",
+    "LICENSE",
+    "dist",
+    "docs",
+    "package.json"
+  ],
+  "main": "./dist/tool-registry.js",
+  "types": "./dist/tool-registry.d.ts",
+  "bin": {
+    "code-intel": "./dist/standalone/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/tool-registry.d.ts",
+      "import": "./dist/tool-registry.js"
+    },
+    "./standalone": {
+      "types": "./dist/standalone/mcp.d.ts",
+      "import": "./dist/standalone/mcp.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/standalone/cli.js",
+    "clean": "rm -rf dist",
+    "prepare": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --experimental-strip-types --test \"test/*.test.ts\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@vscode/tree-sitter-wasm": "^0.3.1",
+    "typescript": "^5.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  },
+  "packageManager": "npm@10"
+}

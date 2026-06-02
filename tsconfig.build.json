@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": false,
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "rewriteRelativeImportExtensions": true,
+    "sourceMap": true,
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "files": ["src/standalone/cli.ts", "src/tool-registry.ts"],
+  "include": [],
+  "exclude": ["test/**/*.ts", "dist"]
+}
