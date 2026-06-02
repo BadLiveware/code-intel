@@ -35,8 +35,11 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && chmod +x dist/standalone/cli.js",
+    "ci": "npm run typecheck && npm test && npm run build && npm run smoke:cli && npm run pack:dry-run",
     "clean": "rm -rf dist",
+    "pack:dry-run": "npm pack --dry-run",
     "prepare": "npm run build",
+    "smoke:cli": "node dist/standalone/cli.js list && node dist/standalone/cli.js call code_intel_file_outline --cwd src --json '{\"path\":\"tool-registry.ts\",\"maxSymbols\":3}' --format compact",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --experimental-strip-types --test \"test/*.test.ts\""
   },

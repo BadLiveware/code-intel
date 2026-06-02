@@ -92,6 +92,14 @@ Defaults:
 npm run typecheck
 npm test
 npm run build
+npm run smoke:cli
+npm run pack:dry-run
 ```
 
-The test suite uses Node's built-in test runner and `node --experimental-strip-types` for TypeScript test files. The built CLI/MCP path is validated separately by running `npm run build` and invoking `dist/standalone/cli.js`.
+For the full local CI sequence, run:
+
+```bash
+npm run ci
+```
+
+CI runs on Node.js 24 because the source test suite uses Node's built-in test runner with `node --experimental-strip-types` for TypeScript test files. The built CLI/MCP path is validated by `npm run build`, `npm run smoke:cli`, and `npm run pack:dry-run`.
