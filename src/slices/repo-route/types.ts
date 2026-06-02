@@ -5,5 +5,6 @@ export interface CodeIntelRepoRouteParams {
 	maxResults?: number;
 	maxFiles?: number;
 	maxMatchesPerFile?: number;
+	includeIgnored?: boolean;
 	timeoutMs?: number;
 }

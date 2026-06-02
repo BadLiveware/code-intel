@@ -8,6 +8,7 @@ export interface TreeSitterSelectorBatchParams {
 	names: string[];
 	language: string;
 	paths?: string[];
+	includeIgnored?: boolean;
 	maxPerName: number;
 	timeoutMs: number;
 	detail: ResultDetail;
@@ -165,7 +166,7 @@ export async function runTreeSitterSelectorBatchSearch(params: TreeSitterSelecto
 	const detail: ResultDetail = params.detail === "snippets" ? "snippets" : "locations";
 	const paths = normalizeStringArray(params.paths);
 	const languages = languagesForSyntaxSearch(params.language, paths);
-	const parsed = await parseFiles(repoRoot, languages, paths, [], [], timeoutMs, signal);
+	const parsed = await parseFiles(repoRoot, languages, paths, [], [], timeoutMs, signal, params.includeIgnored === true);
 	const diagnostics = [...parsed.diagnostics];
 	const selectorTypes = new Set(["selector_expression", "member_expression", "attribute", "field_expression", "scoped_identifier"]);
 	const wanted = new Set(names);
@@ -237,7 +238,7 @@ export async function runTreeSitterSyntaxSearch(params: CodeIntelSyntaxSearchPar
 	const includeGlobs = normalizeStringArray(params.includeGlobs);
 	const excludeGlobs = normalizeStringArray(params.excludeGlobs);
 	const languages = languagesForSyntaxSearch(params.language, paths);
-	const parsed = await parseFiles(repoRoot, languages, paths, includeGlobs, excludeGlobs, timeoutMs, signal);
+	const parsed = await parseFiles(repoRoot, languages, paths, includeGlobs, excludeGlobs, timeoutMs, signal, params.includeIgnored === true);
 	const callPattern = parseCallPattern(pattern);
 	const selectorPattern = parseSelectorPattern(pattern);
 	const keyedPattern = parseKeyedPattern(pattern);
@@ -263,6 +264,7 @@ export async function runTreeSitterSyntaxSearch(params: CodeIntelSyntaxSearchPar
 		paths: paths.length > 0 ? paths : ["."],
 		includeGlobs,
 		excludeGlobs,
+		includeIgnored: params.includeIgnored === true,
 		selector: params.selector?.trim() || undefined,
 		matchCount: accumulator.matchCount,
 		returned: matches.length,

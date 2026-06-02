@@ -104,6 +104,8 @@ Examples:
 
 In `auto` mode, code-intel first tries the input as repo-root-relative when that file exists; otherwise it resolves the path relative to the server working directory. Use `--path-base repo` to force repo-root-relative behavior, or `--path-base cwd` to force cwd-relative behavior.
 
+Broad scans respect git ignore rules by default using tracked plus unignored working-tree files. This keeps build outputs such as C# `obj/` and `bin/` out of normal routing. Explicit file paths remain inspectable even when ignored, and explicit ignored directories can be scanned deliberately. Use `includeIgnored: true` when generated outputs such as source-generator `.g.cs` files should participate in broad candidate discovery.
+
 Claude Code cannot currently supply Pi's session-tracked touched files. For `code_intel_post_edit_map`, pass `changedFiles` or `baseRef` explicitly.
 
 ## Smoke test

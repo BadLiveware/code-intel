@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { CodeIntelConfig, CodeIntelRepoRouteParams } from "../../types.ts";
+import { collectRepoFiles } from "../../file-discovery.ts";
 import { LANGUAGE_SPECS } from "../../languages.ts";
 import { ensureInsideRoot } from "../../repo.ts";
 import { normalizePositiveInteger, normalizeStringArray } from "../../util.ts";
@@ -12,10 +13,6 @@ interface RouteFile {
 	file: string;
 	absolute: string;
 	language?: string;
-}
-
-function posixPath(value: string): string {
-	return value.split(path.sep).join(path.posix.sep);
 }
 
 function languageFor(file: string): string | undefined {
@@ -40,48 +37,14 @@ function shouldSkipFile(file: string): boolean {
 	return BINARY_OR_NOISY_EXTENSIONS.has(path.extname(file).toLowerCase()) || /(^|\/)node\/logs\//.test(file);
 }
 
-function collectRouteFiles(repoRoot: string, roots: string[], maxFiles: number, timeoutMs: number, diagnostics: string[], signal?: AbortSignal): { files: RouteFile[]; truncated: boolean } {
-	const started = Date.now();
-	const files: RouteFile[] = [];
-	let truncated = false;
-	const addFile = (absolute: string): void => {
-		const file = posixPath(path.relative(repoRoot, absolute));
-		if (!file || shouldSkipFile(file)) return;
-		files.push({ file, absolute, language: languageFor(file) });
-		if (files.length >= maxFiles) truncated = true;
+function collectRouteFiles(repoRoot: string, roots: string[], maxFiles: number, timeoutMs: number, diagnostics: string[], includeIgnored: boolean, signal?: AbortSignal): { files: RouteFile[]; truncated: boolean; gitIgnoreApplied: boolean; explicitIgnoredPathScanned: boolean } {
+	const discovered = collectRepoFiles(repoRoot, { paths: roots, maxFiles, timeoutMs, diagnostics, signal, includeIgnored, excludedDirNames: EXCLUDED_DIRS });
+	return {
+		files: discovered.files.filter((file) => !shouldSkipFile(file.file)).map((file) => ({ file: file.file, absolute: file.absolute, language: languageFor(file.file) })),
+		truncated: discovered.truncated,
+		gitIgnoreApplied: discovered.gitIgnoreApplied,
+		explicitIgnoredPathScanned: discovered.explicitIgnoredPathScanned,
 	};
-	const scanDir = (absoluteDir: string): void => {
-		if (truncated || signal?.aborted || Date.now() - started > timeoutMs) {
-			truncated = true;
-			return;
-		}
-		let entries: fs.Dirent[];
-		try {
-			entries = fs.readdirSync(absoluteDir, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name));
-		} catch (error) {
-			diagnostics.push(`${posixPath(path.relative(repoRoot, absoluteDir))}: ${error instanceof Error ? error.message : String(error)}`);
-			return;
-		}
-		for (const entry of entries) {
-			if (truncated) break;
-			const absolute = path.join(absoluteDir, entry.name);
-			if (entry.isDirectory()) {
-				if (!EXCLUDED_DIRS.has(entry.name)) scanDir(absolute);
-			} else if (entry.isFile()) addFile(absolute);
-		}
-	};
-	for (const root of roots) {
-		const absolute = path.resolve(repoRoot, root);
-		if (!fs.existsSync(absolute)) {
-			diagnostics.push(`${root}: path does not exist`);
-			continue;
-		}
-		const stat = fs.statSync(absolute);
-		if (stat.isDirectory()) scanDir(absolute);
-		else if (stat.isFile()) addFile(absolute);
-		if (truncated) break;
-	}
-	return { files, truncated };
 }
 
 function lineMatches(file: RouteFile, terms: string[], maxMatches: number): Array<{ term: string; line: number }> {
@@ -132,7 +95,7 @@ export async function runRepoRoute(params: CodeIntelRepoRouteParams, repoRoot: s
 	const maxMatchesPerFile = normalizePositiveInteger(params.maxMatchesPerFile, 5, 1, 25);
 	const timeoutMs = normalizePositiveInteger(params.timeoutMs, config.queryTimeoutMs, 1_000, 600_000);
 	const roots = safePaths(repoRoot, params.paths, diagnostics);
-	const scan = collectRouteFiles(repoRoot, roots, maxFiles, timeoutMs, diagnostics, signal);
+	const scan = collectRouteFiles(repoRoot, roots, maxFiles, timeoutMs, diagnostics, params.includeIgnored === true, signal);
 	const candidates = [];
 	for (const file of scan.files) {
 		const pathRows = pathEvidence(file.file, terms);
@@ -149,7 +112,7 @@ export async function runRepoRoute(params: CodeIntelRepoRouteParams, repoRoot: s
 		terms,
 		candidates: returned,
 		summary: { candidateCount: candidates.length, returnedCount: returned.length, filesScanned: scan.files.length },
-		coverage: { truncated: scan.truncated || candidates.length > maxResults, maxResults, maxFiles, maxMatchesPerFile, roots },
+		coverage: { truncated: scan.truncated || candidates.length > maxResults, maxResults, maxFiles, maxMatchesPerFile, roots, gitIgnoreApplied: scan.gitIgnoreApplied, explicitIgnoredPathScanned: scan.explicitIgnoredPathScanned, includeIgnored: params.includeIgnored === true },
 		diagnostics,
 		limitations: ["Repo route ranks files by path and literal evidence only; inspect returned files before making implementation claims."],
 		elapsedMs: Date.now() - started,

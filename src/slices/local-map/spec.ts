@@ -26,6 +26,7 @@ export const localMapToolSpec: CodeIntelToolSpec<CodeIntelLocalMapParams> = {
 		paths: stringArrayParam("Repo-relative files or directories to keep the map local."),
 		language: stringParam("Language for optional selector syntax/doc matches, e.g. go, ts, python, c#, c++, zsh, markdown."),
 		includeSyntax: booleanParam("Run optional selector syntax matches like $X.Name when language is provided. Default true."),
+		includeIgnored: booleanParam("Include files ignored by git ignore rules in Tree-sitter and literal fallback searches. Explicit paths are inspectable either way. Default false."),
 		maxResults: maxResultsProperty,
 		maxPerName: numberParam("Maximum refs/syntax/literal matches per name. Default min(config maxResults, 8)."),
 		timeoutMs: timeoutProperty,

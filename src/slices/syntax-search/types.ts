@@ -7,6 +7,7 @@ export interface CodeIntelSyntaxSearchParams {
 	paths?: string[];
 	includeGlobs?: string[];
 	excludeGlobs?: string[];
+	includeIgnored?: boolean;
 	selector?: string;
 	maxResults?: number;
 	timeoutMs?: number;

@@ -7,6 +7,7 @@ export interface CodeIntelLocalMapParams {
 	paths?: string[];
 	language?: string;
 	includeSyntax?: boolean;
+	includeIgnored?: boolean;
 	maxResults?: number;
 	maxPerName?: number;
 	timeoutMs?: number;

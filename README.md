@@ -84,6 +84,8 @@ Enable them when you want symbol-aware edits that consume code-intel targets and
 
 In `auto` mode, code-intel first tries the input as repo-root-relative when that file exists; otherwise it resolves the path relative to the server working directory. Use `--path-base repo` or `--path-base cwd` to force one interpretation.
 
+Broad scans respect git ignore rules by default using tracked plus unignored working-tree files. Explicit file paths remain inspectable even when ignored, and explicit ignored directories such as `obj/` can be scanned deliberately. Use `includeIgnored: true` on routing/search tools when generated outputs such as source-generator `.g.cs` files should be included in broad candidate discovery.
+
 ## Configuration
 
 Standalone config is loaded in this order:

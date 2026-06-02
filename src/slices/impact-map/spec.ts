@@ -8,6 +8,7 @@ import { runImpactMap } from "./run.ts";
 
 const stringArraySchema = (description: string): Record<string, unknown> => ({ type: "array", items: { type: "string" }, description });
 const numberSchema = (description: string): Record<string, unknown> => ({ type: "number", description });
+const booleanSchema = (description: string): Record<string, unknown> => ({ type: "boolean", description });
 
 export const impactMapInputSchema = {
 	type: "object",
@@ -16,6 +17,10 @@ export const impactMapInputSchema = {
 		symbols: stringArraySchema("Symbols to treat as impact roots."),
 		changedFiles: stringArraySchema("Repo-relative files whose defined symbols should be impact roots."),
 		baseRef: { type: "string", description: "Optional git base ref for discovering changed files with git diff --name-only." },
+		paths: stringArraySchema("Optional repo-relative files or directories to bound candidate discovery. Explicit ignored/generated paths are inspectable."),
+		includeGlobs: stringArraySchema("Additional glob-like include patterns for parsed candidate files."),
+		excludeGlobs: stringArraySchema("Additional glob-like exclude patterns for parsed candidate files. Leading ! is optional."),
+		includeIgnored: booleanSchema("Include files ignored by git ignore rules during broad candidate discovery. Explicit paths are inspectable either way. Default false."),
 		maxResults: numberSchema("Maximum related rows returned. Defaults to min(config maxResults, 125) for locations, or min(config maxResults, 25) for snippets."),
 		maxRootSymbols: numberSchema("Maximum root symbols to query after expanding changed files. Default 20."),
 		timeoutMs: numberSchema("Command timeout in milliseconds. Defaults to config queryTimeoutMs."),
@@ -32,7 +37,7 @@ export const impactMapPromptGuidelines = [
 	"Use code_intel_impact_map as the default code-intel tool after seeing a diff or before editing exported functions/types, handlers, config/schema/protocol behavior, shared helpers, or multiple files.",
 	"Use it to answer: which unchanged caller, consumer, or test files should I read before changing or reviewing this code, and what evidence made them candidates?",
 	"Rows like syntax_call, syntax_selector, and syntax_keyed_field are current-source Tree-sitter candidates with real locations; read candidates and use confirmReferences when exactness matters.",
-	"Start with symbols, changedFiles, or baseRef; inspect rootSymbols, related rows, coverage, truncation, and limitations.",
+	"Start with symbols, changedFiles, or baseRef; add paths to bound large-repo candidate discovery when a review scope is known. Inspect rootSymbols, related rows, coverage, truncation, and limitations.",
 	"If the map is empty or ok:false, use reason plus coverage.supportedImpactLanguages, unsupportedImpactFiles, docFiles, and nonSourceFiles to choose syntax search, source reads, or bounded rg fallback.",
 	"Use detail:'locations' for routing to files; use detail:'snippets' when inline context helps avoid extra reads.",
 	"Use impact maps as the candidate read list for caller, consumer, test, and compatibility inspection.",

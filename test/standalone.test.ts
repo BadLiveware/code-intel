@@ -34,6 +34,34 @@ test("standalone auto path base accepts cwd-relative paths inside a larger git c
 	assert.deepEqual((impact.details.coverage as any).changedFiles, ["packages/api/feature.ts"]);
 });
 
+test("broad scans respect gitignore but allow generated-output opt-in", async () => {
+	const repo = fixtureRepo();
+	fs.writeFileSync(path.join(repo, ".gitignore"), "obj/\nbin/\n");
+	fs.mkdirSync(path.join(repo, "obj"), { recursive: true });
+	fs.writeFileSync(path.join(repo, "obj", "GeneratedThing.g.ts"), `import { authenticate } from "../main"\n\nexport function generatedThing() {\n  return authenticate("generated")\n}\n`);
+	const env = createCodeIntelEnv({ cwd: repo });
+
+	const routeDefault = await runCodeIntelTool("code_intel_repo_route", { terms: ["generatedThing"], maxResults: 20 }, env);
+	assert.equal((routeDefault.details.candidates as any[]).some((row) => row.file === "obj/GeneratedThing.g.ts"), false);
+	assert.equal((routeDefault.details.coverage as any).gitIgnoreApplied, true);
+
+	const routeIncluded = await runCodeIntelTool("code_intel_repo_route", { terms: ["generatedThing"], includeIgnored: true, maxResults: 20 }, env);
+	assert.equal((routeIncluded.details.candidates as any[]).some((row) => row.file === "obj/GeneratedThing.g.ts"), true);
+
+	const routeExplicit = await runCodeIntelTool("code_intel_repo_route", { terms: ["generatedThing"], paths: ["obj"], maxResults: 20 }, env);
+	assert.equal((routeExplicit.details.candidates as any[]).some((row) => row.file === "obj/GeneratedThing.g.ts"), true);
+	assert.equal((routeExplicit.details.coverage as any).explicitIgnoredPathScanned, true);
+
+	const impactDefault = await runCodeIntelTool("code_intel_impact_map", { changedFiles: ["main.ts"], maxResults: 50 }, env);
+	assert.equal((impactDefault.details.related as any[]).some((row) => row.file === "obj/GeneratedThing.g.ts"), false);
+
+	const impactIncluded = await runCodeIntelTool("code_intel_impact_map", { changedFiles: ["main.ts"], includeIgnored: true, maxResults: 50 }, env);
+	assert.equal((impactIncluded.details.related as any[]).some((row) => row.file === "obj/GeneratedThing.g.ts"), true);
+
+	const impactExplicit = await runCodeIntelTool("code_intel_impact_map", { changedFiles: ["main.ts"], paths: ["obj"], maxResults: 50 }, env);
+	assert.equal((impactExplicit.details.related as any[]).some((row) => row.file === "obj/GeneratedThing.g.ts"), true);
+});
+
 test("standalone registry gates mutation tools unless enabled", async () => {
 	const repo = fixtureRepo();
 	const env = createCodeIntelEnv({ cwd: repo });

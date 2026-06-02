@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { CodeIntelConfig, CodeIntelFileOutlineParams, CodeIntelRepoOverviewParams, CodeIntelTestMapParams, ResultDetail } from "../../types.ts";
 import { LANGUAGE_CAPABILITIES, LANGUAGE_SPECS, languageCapability, languageSpec } from "../../languages.ts";
+import { collectRepoFiles } from "../../file-discovery.ts";
 import { importsFor } from "../../language-support/imports.ts";
 import { ensureInsideRoot } from "../../repo.ts";
 import { runReferenceConfirmation } from "../../lsp/confirmation.ts";
@@ -162,99 +163,128 @@ function includeByGlobs(file: string, includeGlobs: string[], excludeGlobs: stri
 	return excludes.length === 0 || !matchesAnyGlob(file, excludes);
 }
 
-function scanRepo(repoRoot: string, params: { paths?: string[]; maxDepth: number; maxDirs: number; maxFilesPerDir: number; includeVendor: boolean; includeGenerated: boolean; includeGlobs?: string[]; excludeGlobs?: string[]; timeoutMs: number }, signal?: AbortSignal): ScanResult {
-	const started = Date.now();
-	const diagnostics: string[] = [];
-	const roots = safeInputPaths(repoRoot, params.paths, diagnostics);
-	const includeGlobs = params.includeGlobs ?? [];
-	const excludeGlobs = params.excludeGlobs ?? [];
-	const files: ScanFile[] = [];
-	const excludedDirs: Record<string, number> = {};
-	let dirsVisited = 0;
-	let filesVisited = 0;
-	let truncated = false;
+function scanExcludedDirs(includeVendor: boolean, includeGenerated: boolean): Set<string> {
+	const dirs = new Set(DEFAULT_EXCLUDED_DIRS);
+	if (!includeVendor) for (const dir of VENDOR_DIRS) dirs.add(dir);
+	if (!includeGenerated) for (const dir of GENERATED_DIRS) dirs.add(dir);
+	return dirs;
+}
 
-	function scanDirectory(absoluteDir: string, depth: number): ScanDirectory {
-		const relativeDir = repoRelative(repoRoot, absoluteDir);
-		const dir = emptyDir(relativeDir, depth);
-		if (signal?.aborted || Date.now() - started > params.timeoutMs) {
-			diagnostics.push("Repository scan stopped before all paths were visited");
-			dir.truncated = true;
-			truncated = true;
-			return dir;
-		}
-		dirsVisited++;
-		if (dirsVisited > params.maxDirs) {
-			dir.truncated = true;
-			truncated = true;
-			return dir;
-		}
+function fileUnderRoot(file: string, root: string): boolean {
+	if (root === "." || root === "") return true;
+	return file === root || file.startsWith(`${root.replace(/\/$/, "")}/`);
+}
+
+function relativeToRoot(file: string, root: string): string {
+	if (root === "." || root === "") return file;
+	if (file === root) return path.posix.basename(file);
+	return file.slice(root.replace(/\/$/, "").length + 1);
+}
+
+function scanRepo(repoRoot: string, params: { paths?: string[]; maxDepth: number; maxDirs: number; maxFilesPerDir: number; includeVendor: boolean; includeGenerated: boolean; includeIgnored?: boolean; includeGlobs?: string[]; excludeGlobs?: string[]; timeoutMs: number }, signal?: AbortSignal): ScanResult {
+	const diagnostics: string[] = [];
+	const excludedDirNames = scanExcludedDirs(params.includeVendor, params.includeGenerated);
+	const discovered = collectRepoFiles(repoRoot, {
+		paths: params.paths,
+		includeGlobs: params.includeGlobs,
+		excludeGlobs: params.excludeGlobs,
+		includeIgnored: params.includeIgnored === true,
+		excludedDirNames,
+		timeoutMs: params.timeoutMs,
+		diagnostics,
+		signal,
+	});
+	const files: ScanFile[] = discovered.files.map((file) => {
+		const language = fileLanguage(file.file);
+		return { path: file.file, absolutePath: file.absolute, language, category: fileCategory(file.file, language), extension: path.extname(file.file) };
+	});
+	const excludedDirs = { ...discovered.excludedDirs };
+	const countExcludedDirs = (absoluteDir: string, depth: number): void => {
+		if (depth > params.maxDepth || signal?.aborted) return;
 		let entries: fs.Dirent[];
 		try {
-			entries = fs.readdirSync(absoluteDir, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name));
-		} catch (error) {
-			diagnostics.push(`${relativeDir}: ${error instanceof Error ? error.message : String(error)}`);
-			return dir;
+			entries = fs.readdirSync(absoluteDir, { withFileTypes: true });
+		} catch {
+			return;
 		}
 		for (const entry of entries) {
-			const absolute = path.join(absoluteDir, entry.name);
-			if (entry.isDirectory()) {
-				if (isIgnoredDir(entry.name, params.includeVendor, params.includeGenerated)) {
-					excludedDirs[entry.name] = (excludedDirs[entry.name] ?? 0) + 1;
-					continue;
-				}
-				dir.dirs++;
-				if (depth < params.maxDepth) dir.children.push(scanDirectory(absolute, depth + 1));
-				else {
-					dir.truncated = true;
-					truncated = true;
-				}
-			} else if (entry.isFile()) {
-				const relativeFile = repoRelative(repoRoot, absolute);
-				if (!includeByGlobs(relativeFile, includeGlobs, excludeGlobs)) continue;
-				const language = fileLanguage(relativeFile);
-				const scanFile: ScanFile = { path: relativeFile, absolutePath: absolute, language, category: fileCategory(relativeFile, language), extension: path.extname(relativeFile) };
-				files.push(scanFile);
-				filesVisited++;
-				addFileStats(dir, scanFile);
-				if (dir.fileEntries.length < params.maxFilesPerDir) dir.fileEntries.push(scanFile);
-				else if (params.maxFilesPerDir > 0) {
-					dir.truncated = true;
-					truncated = true;
-				}
-			}
+			if (!entry.isDirectory()) continue;
+			if (excludedDirNames.has(entry.name)) excludedDirs[entry.name] = (excludedDirs[entry.name] ?? 0) + 1;
+			else countExcludedDirs(path.join(absoluteDir, entry.name), depth + 1);
 		}
-		for (const child of dir.children) {
-			dir.files += child.files;
-			dir.sourceFiles += child.sourceFiles;
-			dir.testFiles += child.testFiles;
-			dir.docFiles += child.docFiles;
-			dir.configFiles += child.configFiles;
-			dir.otherFiles += child.otherFiles;
-			for (const [language, count] of child.languages) dir.languages.set(language, (dir.languages.get(language) ?? 0) + count);
-			if (child.truncated) dir.truncated = true;
-		}
-		return dir;
+	};
+	for (const root of discovered.roots) {
+		const absolute = path.resolve(repoRoot, root);
+		if (fs.existsSync(absolute) && fs.statSync(absolute).isDirectory()) countExcludedDirs(absolute, 0);
 	}
+	let dirsVisited = 0;
+	let truncated = discovered.truncated;
+
+	const createDir = (relativePath: string, depth: number): ScanDirectory | undefined => {
+		if (dirsVisited >= params.maxDirs) {
+			truncated = true;
+			return undefined;
+		}
+		dirsVisited++;
+		return emptyDir(relativePath, depth);
+	};
+
+	const addToDirectory = (dir: ScanDirectory, root: string, file: ScanFile, parts: string[], depth: number): void => {
+		addFileStats(dir, file);
+		if (parts.length === 1) {
+			if (dir.fileEntries.length < params.maxFilesPerDir) dir.fileEntries.push(file);
+			else if (params.maxFilesPerDir > 0) {
+				dir.truncated = true;
+				truncated = true;
+			}
+			return;
+		}
+		if (depth >= params.maxDepth) {
+			dir.truncated = true;
+			truncated = true;
+			return;
+		}
+		const childName = parts[0];
+		const childPath = dir.path === "." ? childName : `${dir.path}/${childName}`;
+		let child = dir.children.find((candidate) => candidate.path === childPath);
+		if (!child) {
+			child = createDir(childPath, depth + 1);
+			if (!child) {
+				dir.truncated = true;
+				return;
+			}
+			dir.children.push(child);
+			dir.dirs++;
+		}
+		addToDirectory(child, root, file, parts.slice(1), depth + 1);
+		if (child.truncated) dir.truncated = true;
+	};
 
 	const directories: ScanDirectory[] = [];
-	for (const root of roots) {
+	for (const root of discovered.roots) {
 		const absolute = path.resolve(repoRoot, root);
-		if (!fs.existsSync(absolute)) {
-			diagnostics.push(`${root}: path does not exist`);
-			continue;
+		if (!fs.existsSync(absolute) || !fs.statSync(absolute).isDirectory()) continue;
+		const dir = createDir(root, 0);
+		if (!dir) break;
+		for (const file of files.filter((candidate) => fileUnderRoot(candidate.path, root))) {
+			const relative = relativeToRoot(file.path, root);
+			const parts = relative.split("/").filter(Boolean);
+			if (parts.length === 0) continue;
+			addToDirectory(dir, root, file, parts, 0);
 		}
-		const stat = fs.statSync(absolute);
-		if (stat.isDirectory()) directories.push(scanDirectory(absolute, 0));
-		else if (stat.isFile()) {
-			if (!includeByGlobs(root, includeGlobs, excludeGlobs)) continue;
-			const language = fileLanguage(root);
-			const scanFile: ScanFile = { path: root, absolutePath: absolute, language, category: fileCategory(root, language), extension: path.extname(root) };
-			files.push(scanFile);
-			filesVisited++;
-		}
+		directories.push(dir);
 	}
-	return { roots, directories, files, diagnostics, excludedDirs, truncated, dirsVisited, filesVisited };
+
+	return {
+		roots: discovered.roots,
+		directories,
+		files,
+		diagnostics,
+		excludedDirs,
+		truncated,
+		dirsVisited,
+		filesVisited: files.length,
+	};
 }
 
 function declarationRows(records: SymbolRecord[], detail: ResultDetail, source?: string, repoRoot?: string): Record<string, unknown>[] {
@@ -317,7 +347,7 @@ export async function runRepoOverview(params: CodeIntelRepoOverviewParams, repoR
 	const maxFilesPerDir = normalizePositiveInteger(params.maxFilesPerDir, tier === "shape" ? 1 : 80, 0, 1_000);
 	const maxSymbolsPerFile = normalizePositiveInteger(params.maxSymbolsPerFile, 8, 0, 100);
 	const timeoutMs = normalizePositiveInteger(params.timeoutMs, config.queryTimeoutMs, 1_000, 600_000);
-	const scan = scanRepo(repoRoot, { paths: params.paths, maxDepth, maxDirs, maxFilesPerDir, includeVendor: params.includeVendor === true, includeGenerated: params.includeGenerated === true, includeGlobs: normalizeStringArray(params.includeGlobs), excludeGlobs: normalizeStringArray(params.excludeGlobs), timeoutMs }, signal);
+	const scan = scanRepo(repoRoot, { paths: params.paths, maxDepth, maxDirs, maxFilesPerDir, includeVendor: params.includeVendor === true, includeGenerated: params.includeGenerated === true, includeIgnored: params.includeIgnored === true, includeGlobs: normalizeStringArray(params.includeGlobs), excludeGlobs: normalizeStringArray(params.excludeGlobs), timeoutMs }, signal);
 	const declarationsByFile = new Map<string, unknown[]>();
 	let parsedCount = 0;
 	if (tier === "files" && maxSymbolsPerFile > 0) {
@@ -355,7 +385,7 @@ export async function runRepoOverview(params: CodeIntelRepoOverviewParams, repoR
 		roots: scan.roots,
 		directories: serialized,
 		summary: { dirCount: scan.dirsVisited, fileCount: scan.filesVisited, sourceFileCount: scan.files.filter((file) => file.category === "source").length, testFileCount: scan.files.filter((file) => file.category === "test").length, parsedFileCount: parsedCount },
-		coverage: { maxDepth, maxDirs, maxFilesPerDir, maxSymbolsPerFile, truncated: scan.truncated, excludedDirs: scan.excludedDirs },
+		coverage: { maxDepth, maxDirs, maxFilesPerDir, maxSymbolsPerFile, truncated: scan.truncated, excludedDirs: scan.excludedDirs, includeIgnored: params.includeIgnored === true },
 		diagnostics: scan.diagnostics,
 		limitations: [tier === "shape" ? "Shape overview is filesystem evidence only; use tier:'files' or code_intel_file_outline for declarations." : "File-tier overview is capped per directory and per file; use code_intel_file_outline for a complete single-file outline."],
 		elapsedMs: Date.now() - started,
@@ -379,11 +409,11 @@ export async function runTestMap(params: CodeIntelTestMapParams, repoRoot: strin
 	const sourceLanguage = safePath ? fileLanguage(safePath) : undefined;
 	const explicitTerms = [...new Set([...normalizeStringArray(params.symbols), ...normalizeStringArray(params.names)].filter((term) => term.length >= 2))];
 	const terms = testMapTerms(safePath, explicitTerms);
-	const shapeScan = scanRepo(repoRoot, { paths: ["."], maxDepth: 4, maxDirs: 500, maxFilesPerDir: 0, includeVendor: false, includeGenerated: false, timeoutMs }, signal);
+	const shapeScan = scanRepo(repoRoot, { paths: ["."], maxDepth: 4, maxDirs: 500, maxFilesPerDir: 0, includeVendor: false, includeGenerated: false, includeIgnored: params.includeIgnored === true, timeoutMs }, signal);
 	const explicitTestPaths = normalizeStringArray(params.testPaths);
 	const testRoots = explicitTestPaths.length > 0 ? explicitTestPaths : defaultTestPaths(shapeScan);
 	const searchPaths = explicitTestPaths.length > 0 ? explicitTestPaths : testSearchPaths(testRoots, safePath, sourceLanguage);
-	const scan = scanRepo(repoRoot, { paths: searchPaths, maxDepth: 12, maxDirs: 1_000, maxFilesPerDir: 1_000, includeVendor: false, includeGenerated: false, timeoutMs }, signal);
+	const scan = scanRepo(repoRoot, { paths: searchPaths, maxDepth: 12, maxDirs: 1_000, maxFilesPerDir: 1_000, includeVendor: false, includeGenerated: false, includeIgnored: params.includeIgnored === true, timeoutMs }, signal);
 	const candidates: Array<Record<string, unknown> & { score: number; evidence: Record<string, unknown>[] }> = [];
 	for (const file of scan.files) {
 		if (!shouldConsiderTestCandidate(file, sourceLanguage)) continue;
@@ -399,7 +429,7 @@ export async function runTestMap(params: CodeIntelTestMapParams, repoRoot: strin
 		target: { path: safePath, symbols: normalizeStringArray(params.symbols), names: normalizeStringArray(params.names) },
 		candidates: outputCandidates,
 		summary: { candidateCount: candidates.length, returnedCount: outputCandidates.length, testRootsSearched: testRoots },
-		coverage: { truncated: candidates.length > maxResults, maxResults, maxLiteralMatches, searchedFileCount: scan.files.length, excludedDirs: { ...shapeScan.excludedDirs, ...scan.excludedDirs } },
+		coverage: { truncated: candidates.length > maxResults, maxResults, maxLiteralMatches, searchedFileCount: scan.files.length, excludedDirs: { ...shapeScan.excludedDirs, ...scan.excludedDirs }, includeIgnored: params.includeIgnored === true },
 		diagnostics: [...diagnostics, ...shapeScan.diagnostics, ...scan.diagnostics],
 		limitations: ["Test maps are evidence-ranked candidates, not exhaustive coverage proof. Non-code tests may only match path or literal terms."],
 		elapsedMs: Date.now() - started,

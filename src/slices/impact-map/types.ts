@@ -5,6 +5,10 @@ export interface CodeIntelImpactMapParams {
 	symbols?: string[];
 	changedFiles?: string[];
 	baseRef?: string;
+	paths?: string[];
+	includeGlobs?: string[];
+	excludeGlobs?: string[];
+	includeIgnored?: boolean;
 	maxResults?: number;
 	maxRootSymbols?: number;
 	timeoutMs?: number;

@@ -131,7 +131,7 @@ function parseRipgrepJsonLines(stdout: string, detail: ResultDetail, maxResults:
 	return matches;
 }
 
-async function runLiteralSearch(name: string, paths: string[], repoRoot: string, timeoutMs: number, maxPerName: number, detail: ResultDetail, signal?: AbortSignal): Promise<Record<string, unknown>> {
+async function runLiteralSearch(name: string, paths: string[], repoRoot: string, timeoutMs: number, maxPerName: number, detail: ResultDetail, includeIgnored: boolean, signal?: AbortSignal): Promise<Record<string, unknown>> {
 	const rg = findExecutable("rg");
 	if (!rg) return { kind: "literal", name, ok: false, reason: "rg is not available for bounded literal fallback." };
 	let scopedPaths: string[];
@@ -140,7 +140,8 @@ async function runLiteralSearch(name: string, paths: string[], repoRoot: string,
 	} catch (error) {
 		return { kind: "literal", name, ok: false, diagnostic: error instanceof Error ? error.message : String(error) };
 	}
-	const command: CommandResult = await runCommand(rg, ["--json", "--fixed-strings", "--line-number", "--column", "--", name, ...scopedPaths], { cwd: repoRoot, timeoutMs, signal, maxOutputBytes: 500_000 });
+	const ignoreArgs = includeIgnored ? ["--no-ignore"] : [];
+	const command: CommandResult = await runCommand(rg, ["--json", "--fixed-strings", "--line-number", "--column", ...ignoreArgs, "--", name, ...scopedPaths], { cwd: repoRoot, timeoutMs, signal, maxOutputBytes: 500_000 });
 	if (command.exitCode !== 0 && command.exitCode !== 1) {
 		return { kind: "literal", name, ok: false, matchCount: 0, returned: 0, matches: [], command: summarizeCommandBrief(command) };
 	}
@@ -155,6 +156,7 @@ async function runLiteralSearch(name: string, paths: string[], repoRoot: string,
 		detail,
 		summary: summarizeFileDistribution(matches),
 		matches,
+		includeIgnored,
 		command: summarizeCommandBrief(command),
 	};
 }
@@ -199,7 +201,7 @@ export async function runLocalMap(params: CodeIntelLocalMapParams, repoRoot: str
 	}
 
 	const treeSitterMaps: Record<string, unknown>[] = [];
-	const treeSitterMap = await safely({ kind: "tree_sitter_map", name: names.join(",") }, () => runTreeSitterImpact({ symbols: names, paths, changedFiles: [], maxRootSymbols: names.length, maxResults: Math.min(maxResults * maxPerName, 200), timeoutMs, detail }, repoRoot, signal));
+	const treeSitterMap = await safely({ kind: "tree_sitter_map", name: names.join(",") }, () => runTreeSitterImpact({ symbols: names, paths, changedFiles: [], includeIgnored: params.includeIgnored, maxRootSymbols: names.length, maxResults: Math.min(maxResults * maxPerName, 200), timeoutMs, detail }, repoRoot, signal));
 	treeSitterMaps.push({ kind: "tree_sitter_map", name: names.join(","), ok: treeSitterMap.ok, rootSymbols: treeSitterMap.rootSymbols, roots: treeSitterMap.roots, results: Array.isArray(treeSitterMap.related) ? treeSitterMap.related : [], summary: treeSitterMap.summary, coverage: treeSitterMap.coverage, diagnostics: treeSitterMap.diagnostics });
 
 	const symbolContexts: Record<string, unknown>[] = [];
@@ -209,7 +211,7 @@ export async function runLocalMap(params: CodeIntelLocalMapParams, repoRoot: str
 	const selectorNames = includeSyntax ? names.filter((name) => selectorPattern(name) !== undefined) : [];
 	if (includeSyntax && selectorNames.length > 0 && language) {
 		try {
-			syntaxMatches.push(...await runTreeSitterSelectorBatchSearch({ names: selectorNames, language, paths, maxPerName: Math.min(maxPerName, 8), timeoutMs, detail }, repoRoot, signal));
+			syntaxMatches.push(...await runTreeSitterSelectorBatchSearch({ names: selectorNames, language, paths, includeIgnored: params.includeIgnored, maxPerName: Math.min(maxPerName, 8), timeoutMs, detail }, repoRoot, signal));
 		} catch (error) {
 			for (const name of selectorNames) syntaxMatches.push({ kind: "selector_syntax", name, pattern: selectorPattern(name), ok: false, diagnostic: error instanceof Error ? error.message : String(error) });
 		}
@@ -219,7 +221,7 @@ export async function runLocalMap(params: CodeIntelLocalMapParams, repoRoot: str
 
 	const literalMatches: Record<string, unknown>[] = [];
 	for (const name of names) {
-		const literal = await safely({ kind: "literal", name }, () => runLiteralSearch(name, paths, repoRoot, timeoutMs, Math.min(maxPerName, 12), detail, signal));
+		const literal = await safely({ kind: "literal", name }, () => runLiteralSearch(name, paths, repoRoot, timeoutMs, Math.min(maxPerName, 12), detail, params.includeIgnored === true, signal));
 		literalMatches.push(literal);
 	}
 
@@ -240,6 +242,7 @@ export async function runLocalMap(params: CodeIntelLocalMapParams, repoRoot: str
 		anchors,
 		names,
 		paths,
+		includeIgnored: params.includeIgnored === true,
 		language,
 		sections: {
 			treeSitterMaps,
@@ -262,6 +265,7 @@ export async function runLocalMap(params: CodeIntelLocalMapParams, repoRoot: str
 			maxPerName,
 			maxResults,
 			includeSyntax,
+			includeIgnored: params.includeIgnored === true,
 			languageResolvedFrom: requestedLanguage && requestedLanguage !== language ? requestedLanguage : undefined,
 			syntaxSearches: syntaxMatches.length,
 			markdownSearches: markdownMatches.length,

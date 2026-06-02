@@ -1,45 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { LANGUAGE_SPECS, languageSpec, type LanguageSpec } from "../languages.ts";
-import { ensureInsideRoot } from "../repo.ts";
+import { collectRepoFiles } from "../file-discovery.ts";
 import { parserFor } from "./loader.ts";
 import type { ParsedFile, ParserBundle, TreeSitterNode } from "./nodes.ts";
 
 const EXCLUDED_DIRS = new Set([".git", ".hg", ".svn", "node_modules", "vendor", "dist", "build", "target", ".cache"]);
 
-function isIgnoredDir(name: string): boolean {
-	return EXCLUDED_DIRS.has(name) || name.startsWith("externals.");
-}
-
 function repoRelative(repoRoot: string, absoluteFile: string): string {
 	return path.relative(repoRoot, absoluteFile).split(path.sep).join(path.posix.sep);
-}
-
-function globToRegExp(glob: string): RegExp {
-	const normalized = glob.startsWith("!") ? glob.slice(1) : glob;
-	let output = "^";
-	for (let index = 0; index < normalized.length; index++) {
-		const char = normalized[index];
-		const next = normalized[index + 1];
-		if (char === "*" && next === "*") {
-			output += ".*";
-			index++;
-		} else if (char === "*") output += "[^/]*";
-		else if (char === "?") output += "[^/]";
-		else output += char.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
-	}
-	return new RegExp(`${output}$`);
-}
-
-function matchesGlob(file: string, globs: string[]): boolean {
-	return globs.some((glob) => globToRegExp(glob).test(file));
-}
-
-function shouldIncludeFile(file: string, includeGlobs: string[], excludeGlobs: string[]): boolean {
-	const normalizedExcludes = excludeGlobs.map((glob) => glob.startsWith("!") ? glob.slice(1) : glob);
-	if (includeGlobs.length > 0 && !matchesGlob(file, includeGlobs)) return false;
-	if (normalizedExcludes.length > 0 && matchesGlob(file, normalizedExcludes)) return false;
-	return true;
 }
 
 function specsForLanguages(languages: string[], diagnostics: string[]): LanguageSpec[] {
@@ -74,56 +43,26 @@ function emptyFileGroups(specs: LanguageSpec[]): Map<string, Set<string>> {
 	return new Map(specs.map((spec) => [spec.id, new Set<string>()]));
 }
 
-function collectFilesForSpecs(repoRoot: string, specs: LanguageSpec[], paths: string[], includeGlobs: string[] = [], excludeGlobs: string[] = []): Map<string, string[]> {
+function collectFilesForSpecs(repoRoot: string, specs: LanguageSpec[], paths: string[], includeGlobs: string[] = [], excludeGlobs: string[] = [], includeIgnored = false, timeoutMs = 30_000, signal?: AbortSignal, diagnostics: string[] = []): Map<string, string[]> {
 	const filesBySpec = emptyFileGroups(specs);
 	const specsByExtension = extensionSpecMap(specs);
-	const roots = paths.length > 0 ? paths : ["."];
-	const stack: string[] = [];
-
-	const addFile = (absoluteFile: string): void => {
-		const matchingSpecs = specsByExtension.get(path.extname(absoluteFile));
-		if (!matchingSpecs) return;
-		const relative = repoRelative(repoRoot, absoluteFile);
-		if (!shouldIncludeFile(relative, includeGlobs, excludeGlobs)) return;
-		for (const spec of matchingSpecs) filesBySpec.get(spec.id)?.add(absoluteFile);
-	};
-
-	for (const inputPath of roots) {
-		const safe = ensureInsideRoot(repoRoot, inputPath);
-		const absolute = path.resolve(repoRoot, safe);
-		if (!fs.existsSync(absolute)) continue;
-		const stat = fs.statSync(absolute);
-		if (stat.isDirectory()) stack.push(absolute);
-		else if (stat.isFile()) addFile(absolute);
+	const discovered = collectRepoFiles(repoRoot, { paths, includeGlobs, excludeGlobs, includeIgnored, excludedDirNames: EXCLUDED_DIRS, timeoutMs, signal, diagnostics });
+	for (const file of discovered.files) {
+		const matchingSpecs = specsByExtension.get(path.extname(file.file));
+		if (!matchingSpecs) continue;
+		for (const spec of matchingSpecs) filesBySpec.get(spec.id)?.add(file.absolute);
 	}
-
-	while (stack.length > 0) {
-		const current = stack.pop() as string;
-		let entries: fs.Dirent[];
-		try {
-			entries = fs.readdirSync(current, { withFileTypes: true });
-		} catch {
-			continue;
-		}
-		for (const entry of entries) {
-			const absolute = path.join(current, entry.name);
-			if (entry.isDirectory()) {
-				if (!isIgnoredDir(entry.name)) stack.push(absolute);
-			} else if (entry.isFile()) addFile(absolute);
-		}
-	}
-
 	return new Map([...filesBySpec.entries()].map(([language, files]) => [language, [...files].sort()]));
 }
 
-export async function parseFiles(repoRoot: string, languages: string[], paths: string[] = [], includeGlobs: string[] = [], excludeGlobs: string[] = [], timeoutMs = 30_000, signal?: AbortSignal): Promise<{ parsedFiles: ParsedFile[]; diagnostics: string[]; filesByLanguage: Record<string, number>; parsedByLanguage: Record<string, number> }> {
+export async function parseFiles(repoRoot: string, languages: string[], paths: string[] = [], includeGlobs: string[] = [], excludeGlobs: string[] = [], timeoutMs = 30_000, signal?: AbortSignal, includeIgnored = false): Promise<{ parsedFiles: ParsedFile[]; diagnostics: string[]; filesByLanguage: Record<string, number>; parsedByLanguage: Record<string, number> }> {
 	const started = Date.now();
 	const diagnostics: string[] = [];
 	const parsedFiles: ParsedFile[] = [];
 	const filesByLanguage: Record<string, number> = {};
 	const parsedByLanguage: Record<string, number> = {};
 	const specs = specsForLanguages(languages, diagnostics);
-	const filesBySpec = collectFilesForSpecs(repoRoot, specs, paths, includeGlobs, excludeGlobs);
+	const filesBySpec = collectFilesForSpecs(repoRoot, specs, paths, includeGlobs, excludeGlobs, includeIgnored, timeoutMs, signal, diagnostics);
 	for (const spec of specs) {
 		let bundle: ParserBundle;
 		try {

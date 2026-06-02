@@ -18,7 +18,7 @@ export async function runImpactMap(params: CodeIntelImpactMapParams, repoRoot: s
 	const base = await changedFilesFromBase(repoRoot, params.baseRef, config.queryTimeoutMs, config.maxOutputBytes);
 	if (base.diagnostic) diagnostics.push(base.diagnostic);
 	const changedFiles = [...new Set([...normalizeStringArray(params.changedFiles), ...base.files])];
-	const payload = await runTreeSitterImpact({ symbols: params.symbols, changedFiles, maxRootSymbols, maxResults, timeoutMs, detail }, repoRoot, signal);
+	const payload = await runTreeSitterImpact({ symbols: params.symbols, changedFiles, paths: params.paths, includeGlobs: params.includeGlobs, excludeGlobs: params.excludeGlobs, includeIgnored: params.includeIgnored, maxRootSymbols, maxResults, timeoutMs, detail }, repoRoot, signal);
 	const output: Record<string, unknown> = {
 		...payload,
 		diagnostics: [...diagnostics, ...(Array.isArray(payload.diagnostics) ? payload.diagnostics : [])],

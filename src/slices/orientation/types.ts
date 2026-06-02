@@ -12,6 +12,7 @@ export interface CodeIntelRepoOverviewParams {
 	excludeGlobs?: string[];
 	includeGenerated?: boolean;
 	includeVendor?: boolean;
+	includeIgnored?: boolean;
 	timeoutMs?: number;
 }
 
@@ -33,6 +34,7 @@ export interface CodeIntelTestMapParams {
 	testPaths?: string[];
 	maxResults?: number;
 	maxLiteralMatches?: number;
+	includeIgnored?: boolean;
 	confirmReferences?: "gopls" | "typescript" | "clangd" | "rust-analyzer" | "csharp-ls" | "pyrefly";
 	maxReferenceRoots?: number;
 	maxReferenceResults?: number;

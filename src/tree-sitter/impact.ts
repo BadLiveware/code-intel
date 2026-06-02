@@ -11,6 +11,9 @@ export interface TreeSitterImpactParams {
 	symbols?: string[];
 	changedFiles?: string[];
 	paths?: string[];
+	includeGlobs?: string[];
+	excludeGlobs?: string[];
+	includeIgnored?: boolean;
 	maxRootSymbols: number;
 	maxResults: number;
 	timeoutMs: number;
@@ -175,8 +178,8 @@ export async function runTreeSitterImpact(params: TreeSitterImpactParams, repoRo
 	}
 	const supportedImpactFiles = supportSummary.supportedImpactFiles as Array<{ file: string; languages: string[] }>;
 	const onlyCppChangedFiles = changedFiles.length > 0 && supportedImpactFiles.length > 0 && supportedImpactFiles.every((file) => file.languages.includes("cpp"));
-	const parsePaths = scopedPaths.length > 0 ? scopedPaths : onlyCppChangedFiles ? changedFiles : [];
-	const parsed = await parseFiles(repoRoot, IMPACT_LANGUAGES, parsePaths, [], [], params.timeoutMs, signal);
+	const parsePaths = scopedPaths.length > 0 ? [...new Set([...changedFiles, ...scopedPaths])] : onlyCppChangedFiles ? changedFiles : [];
+	const parsed = await parseFiles(repoRoot, IMPACT_LANGUAGES, parsePaths, normalizeStringArray(params.includeGlobs), normalizeStringArray(params.excludeGlobs), params.timeoutMs, signal, params.includeIgnored === true);
 	const diagnostics = [...parsed.diagnostics];
 	if (parsed.parsedFiles.length === 0) {
 		return {
@@ -304,6 +307,10 @@ export async function runTreeSitterImpact(params: TreeSitterImpactParams, repoRo
 			rootSymbolsUsed: rootSymbols.length,
 			maxResults: params.maxResults,
 			maxRootSymbols: params.maxRootSymbols,
+			paths: scopedPaths.length > 0 ? scopedPaths : undefined,
+			includeGlobs: normalizeStringArray(params.includeGlobs),
+			excludeGlobs: normalizeStringArray(params.excludeGlobs),
+			includeIgnored: params.includeIgnored === true,
 			limitations: [
 				"Tree-sitter impact maps are current-source syntax read-next candidates, not type-resolved semantic references.",
 				"Same-name functions, fields, and properties from unrelated types can appear; use LSP/compiler tooling for exact references when required.",

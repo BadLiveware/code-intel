@@ -1,6 +1,6 @@
 import { compactCodeIntelOutput } from "../../compact-output.ts";
 import { resolveRepoRootsFromCwd } from "../../repo.ts";
-import { detailProperty, maxResultsProperty, objectSchema, repoRootProperty, stringArrayParam, stringParam, timeoutProperty } from "../../standalone/schema.ts";
+import { booleanParam, detailProperty, maxResultsProperty, objectSchema, repoRootProperty, stringArrayParam, stringParam, timeoutProperty } from "../../standalone/schema.ts";
 import type { CodeIntelEnv } from "../../standalone/env.ts";
 import { normalizeStandalonePathParams } from "../../standalone/path-params.ts";
 import type { CodeIntelToolSpec } from "../../tool-registry.ts";
@@ -26,6 +26,7 @@ export const syntaxSearchToolSpec: CodeIntelToolSpec<CodeIntelSyntaxSearchParams
 		paths: stringArrayParam("Repo-relative files or directories to search. Defaults to '.'. Paths outside the repo are rejected."),
 		includeGlobs: stringArrayParam("Additional glob-like include patterns."),
 		excludeGlobs: stringArrayParam("Additional glob-like exclude patterns. Leading '!' is optional."),
+		includeIgnored: booleanParam("Include files ignored by git ignore rules during broad syntax search. Explicit paths are inspectable either way. Default false."),
 		selector: stringParam("Optional node kind or capture name to extract, e.g. selector_expression for Go field selections."),
 		maxResults: maxResultsProperty,
 		timeoutMs: timeoutProperty,
