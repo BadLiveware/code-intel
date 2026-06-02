@@ -143,6 +143,13 @@ export class JsonRpcClient {
 		return () => this.notificationHandlers.delete(handler);
 	}
 
+	clearNotifications(method?: string, predicate: (message: JsonRpcMessage) => boolean = () => true): void {
+		for (let index = this.notifications.length - 1; index >= 0; index -= 1) {
+			const message = this.notifications[index];
+			if ((method === undefined || message.method === method) && predicate(message)) this.notifications.splice(index, 1);
+		}
+	}
+
 	waitForNotification(method: string, predicate: (message: JsonRpcMessage) => boolean = () => true, timeoutMs = this.options.timeoutMs): Promise<JsonRpcMessage | undefined> {
 		const existing = this.notifications.find((message) => message.method === method && predicate(message));
 		if (existing) return Promise.resolve(existing);
@@ -174,7 +181,32 @@ export class JsonRpcClient {
 
 	async dispose(): Promise<void> {
 		this.options.signal?.removeEventListener("abort", this.abortHandler);
-		if (!this.closed) this.kill();
+		if (this.closed) return;
+		await new Promise<void>((resolve) => {
+			const termTimer = setTimeout(() => this.kill(), 100);
+			const killTimer = setTimeout(() => {
+				try {
+					this.child.kill("SIGKILL");
+				} catch {
+					// Ignore shutdown races.
+				}
+			}, 1_000);
+			const doneTimer = setTimeout(resolve, 2_000);
+			termTimer.unref?.();
+			killTimer.unref?.();
+			doneTimer.unref?.();
+			this.child.once("close", () => {
+				clearTimeout(termTimer);
+				clearTimeout(killTimer);
+				clearTimeout(doneTimer);
+				resolve();
+			});
+			try {
+				this.child.stdin.end();
+			} catch {
+				// Ignore already-closed stdin.
+			}
+		});
 	}
 
 	private handleMessage(message: JsonRpcMessage): void {

@@ -1,42 +1,15 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
-import { commandDiagnostic, findExecutable, runCommand } from "../../exec.ts";
+import { findExecutable } from "../../exec.ts";
 import { ensureInsideRoot } from "../../repo.ts";
-import { LspSession, type LspLocation } from "../lsp-session.ts";
+import type { LspLocation } from "../lsp-session.ts";
+import { csharpLsWorkspaceRoot, withCSharpLsSession } from "./csharp-ls-session.ts";
 import { referenceProviderMetadata } from "../provider-metadata.ts";
 import type { ReferenceConfirmationContext, ReferenceConfirmationLimits, ReferenceConfirmationOptions, ReferenceConfirmationProvider, ReferenceRoot } from "../types.ts";
 import { uriToRepoFile } from "../uri.ts";
 
 const csharpLsMetadata = referenceProviderMetadata("csharp-ls");
 const csharpLsReferenceEvidence = csharpLsMetadata.evidence.references ?? "csharp-ls:textDocument/references";
-
-function findWorkspaceRoot(repoRoot: string, file?: string): string | undefined {
-	let directory = repoRoot;
-	if (file) {
-		try {
-			directory = path.dirname(path.resolve(repoRoot, ensureInsideRoot(repoRoot, file)));
-		} catch {
-			directory = repoRoot;
-		}
-	}
-	while (true) {
-		const entries = fs.existsSync(directory) ? fs.readdirSync(directory) : [];
-		if (entries.some((entry) => entry.endsWith(".sln") || entry.endsWith(".csproj"))) return directory;
-		if (directory === repoRoot) return undefined;
-		const parent = path.dirname(directory);
-		if (parent === directory || !path.relative(repoRoot, parent).startsWith("..")) directory = parent;
-		else return undefined;
-	}
-}
-
-export function csharpLsWorkspaceRoot(repoRoot: string, files: string[] = []): string {
-	for (const file of files) {
-		const workspaceRoot = findWorkspaceRoot(repoRoot, file);
-		if (workspaceRoot) return workspaceRoot;
-	}
-	return findWorkspaceRoot(repoRoot) ?? repoRoot;
-}
 
 function numberValue(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -79,12 +52,6 @@ function uriToLocation(repoRoot: string, location: LspLocation, root: ReferenceR
 	};
 }
 
-async function csharpLsVersion(executable: string, cwd: string, timeoutMs: number): Promise<string | undefined> {
-	const result = await runCommand(executable, ["--version"], { cwd, timeoutMs: Math.min(timeoutMs, 5_000), maxOutputBytes: 20_000 });
-	if (commandDiagnostic(result)) return undefined;
-	return result.stdout.split(/\r?\n/).find(Boolean);
-}
-
 async function confirmCSharpLsRoots(roots: ReferenceRoot[], context: ReferenceConfirmationContext, options: ReferenceConfirmationOptions, limits: ReferenceConfirmationLimits) {
 	const executable = findExecutable("csharp-ls");
 	if (!executable) return { roots: [], references: [], diagnostics: [csharpLsMetadata.missingDiagnostic], limitations: csharpLsMetadata.limitations };
@@ -92,44 +59,49 @@ async function confirmCSharpLsRoots(roots: ReferenceRoot[], context: ReferenceCo
 	const diagnostics: string[] = [];
 	const confirmedRoots: Record<string, unknown>[] = [];
 	const references: Record<string, unknown>[] = [];
-	const session = new LspSession({ command: executable, cwd: workspaceRoot, repoRoot: context.repoRoot, rootUri: pathToFileURL(workspaceRoot).href, timeoutMs: limits.timeoutMs, signal: context.signal, name: "csharp-ls" });
 	try {
-		const init = await session.initialize();
-		if (init.error) diagnostics.push(`initialize: ${init.error.message ?? "csharp-ls error"}`);
-		for (const root of roots) {
-			if (references.length >= limits.maxResults) break;
-			let safeFile: string;
-			try {
-				safeFile = ensureInsideRoot(context.repoRoot, root.file);
-			} catch (error) {
-				diagnostics.push(`${root.name}: ${error instanceof Error ? error.message : String(error)}`);
-				continue;
-			}
-			const column = symbolColumn(context.repoRoot, { ...root, file: safeFile });
-			const document = session.didOpen(safeFile, "csharp");
-			const response = await session.references(document, root.line - 1, Math.max(0, column - 1), options.includeDeclarations === true);
-			confirmedRoots.push({ symbol: root.name, file: safeFile, line: root.line, column, kind: root.kind, position: `${safeFile}:${root.line}:${column}` });
-			if (response.error) {
-				diagnostics.push(`${root.name}: ${response.error.message ?? "csharp-ls references error"}`);
-				continue;
-			}
-			const locations = Array.isArray(response.result) ? response.result : [];
-			for (const location of locations) {
+		const run = await withCSharpLsSession({ repoRoot: context.repoRoot, workspaceRoot, executable, timeoutMs: limits.timeoutMs, persistent: options.persistentLsp === true, signal: context.signal }, async (lease) => {
+			for (const root of roots) {
 				if (references.length >= limits.maxResults) break;
-				const parsed = uriToLocation(context.repoRoot, location as LspLocation, root);
-				if (parsed) references.push(parsed);
+				let safeFile: string;
+				try {
+					safeFile = ensureInsideRoot(context.repoRoot, root.file);
+				} catch (error) {
+					diagnostics.push(`${root.name}: ${error instanceof Error ? error.message : String(error)}`);
+					continue;
+				}
+				const column = symbolColumn(context.repoRoot, { ...root, file: safeFile });
+				const document = lease.openDocument(safeFile, "csharp");
+				const response = await lease.session.references(document, root.line - 1, Math.max(0, column - 1), options.includeDeclarations === true, limits.timeoutMs);
+				confirmedRoots.push({ symbol: root.name, file: safeFile, line: root.line, column, kind: root.kind, position: `${safeFile}:${root.line}:${column}` });
+				if (response.error) {
+					diagnostics.push(`${root.name}: ${response.error.message ?? "csharp-ls references error"}`);
+					continue;
+				}
+				const locations = Array.isArray(response.result) ? response.result : [];
+				for (const location of locations) {
+					if (references.length >= limits.maxResults) break;
+					const parsed = uriToLocation(context.repoRoot, location as LspLocation, root);
+					if (parsed) references.push(parsed);
+				}
 			}
-		}
+			return undefined;
+		});
+		diagnostics.push(...run.diagnostics);
+		return {
+			executable: run.executable,
+			roots: confirmedRoots,
+			references,
+			diagnostics,
+			limitations: csharpLsMetadata.limitations,
+			version: run.version,
+			workspaceRoot: ensureInsideRoot(context.repoRoot, run.workspaceRoot),
+			session: { persistent: run.persistent, reused: run.reused, restarted: run.restarted },
+		};
 	} catch (error) {
 		diagnostics.push(error instanceof Error ? error.message : String(error));
-	} finally {
-		await session.shutdown();
-		diagnostics.push(...session.diagnostics);
+		return { executable, roots: confirmedRoots, references, diagnostics, limitations: csharpLsMetadata.limitations, workspaceRoot: ensureInsideRoot(context.repoRoot, workspaceRoot) };
 	}
-	const stderr = session.stderr.split(/\r?\n/).find((line) => line.trim());
-	if (stderr && diagnostics.length > 0) diagnostics.push(stderr.trim());
-	const version = await csharpLsVersion(executable, workspaceRoot, limits.timeoutMs);
-	return { executable, roots: confirmedRoots, references, diagnostics, limitations: csharpLsMetadata.limitations, version, workspaceRoot: ensureInsideRoot(context.repoRoot, workspaceRoot) };
 }
 
 export const csharpLsReferenceProvider: ReferenceConfirmationProvider = {

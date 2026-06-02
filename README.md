@@ -88,7 +88,7 @@ Broad scans respect git ignore rules by default using tracked plus unignored wor
 
 Long-lived MCP sessions cache parsed files and extracted symbol records by current content hash. The server reads and hashes the file before reusing a cached entry, so edits invalidate cached parse/record data instead of returning stale source facts.
 
-For C# impact maps, `confirmReferences: "csharp-ls"` promotes exact csharp-ls reference rows into the returned `related` candidates before syntax-only rows, while preserving the separate `referenceConfirmation` details for diagnostics and coverage.
+For C# impact maps, `confirmReferences: "csharp-ls"` promotes exact csharp-ls reference rows into the returned `related` candidates before syntax-only rows, while preserving the separate `referenceConfirmation` details for diagnostics and coverage. Long-lived MCP sessions keep a bounded csharp-ls workspace session warm, refresh open file text by content hash with full-document `didChange`, and restart the server when C# project graph files change.
 
 ## Configuration
 

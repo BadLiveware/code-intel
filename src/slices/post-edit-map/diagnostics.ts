@@ -235,14 +235,14 @@ async function collectTypeScriptDiagnostics(repoRoot: string, changedFiles: stri
 	}
 }
 
-export async function collectTouchedDiagnostics(repoRoot: string, changedFiles: string[], config: CodeIntelConfig, signal?: AbortSignal): Promise<DiagnosticCollectionResult> {
+export async function collectTouchedDiagnostics(repoRoot: string, changedFiles: string[], config: CodeIntelConfig, signal?: AbortSignal, options: { persistentLsp?: boolean } = {}): Promise<DiagnosticCollectionResult> {
 	const [typescript, gopls, rustAnalyzer, python, clangd, csharpLs, shellcheck, zsh, markdownlint] = await Promise.all([
 		collectTypeScriptDiagnostics(repoRoot, changedFiles, config, signal),
 		collectGoplsDiagnostics(repoRoot, changedFiles, config, signal),
 		collectRustAnalyzerDiagnostics(repoRoot, changedFiles, config, signal),
 		collectPythonDiagnostics(repoRoot, changedFiles, config, signal),
 		collectClangdDiagnostics(repoRoot, changedFiles, config, signal),
-		collectCSharpLsDiagnostics(repoRoot, changedFiles, config, signal),
+		collectCSharpLsDiagnostics(repoRoot, changedFiles, config, signal, { persistentLsp: options.persistentLsp === true }),
 		collectShellCheckDiagnostics(repoRoot, changedFiles, config, signal),
 		collectZshDiagnostics(repoRoot, changedFiles, config, signal),
 		collectMarkdownlintDiagnostics(repoRoot, changedFiles, config, signal),

@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { test } from "node:test";
+import { shutdownCSharpLsSessions } from "../src/lsp/providers/csharp-ls-session.ts";
+import { collectTouchedDiagnostics } from "../src/slices/post-edit-map/diagnostics.ts";
 import { createCodeIntelEnv } from "../src/standalone/env.ts";
 import { listCodeIntelToolSpecs, runCodeIntelTool } from "../src/tool-registry.ts";
+import { DEFAULT_CONFIG } from "../src/types.ts";
 import { fixtureRepo } from "./test-harness.ts";
 
 async function withPath(pathValue: string, run: () => Promise<void>): Promise<void> {
@@ -50,6 +53,72 @@ function handle(message) {
     write({ jsonrpc: "2.0", id: message.id, result: [{ uri, range: { start: { line: 10, character: 22 }, end: { line: 10, character: 34 } } }] });
   } else if (message.method === "shutdown") write({ jsonrpc: "2.0", id: message.id, result: null });
   else if (message.method === "exit") process.exit(0);
+}
+process.stdin.on("data", (chunk) => { buffer = Buffer.concat([buffer, chunk]); parse(); });
+`);
+	fs.chmodSync(file, 0o755);
+}
+
+function writeLoggingCSharpLs(file: string, logFile: string): void {
+	fs.writeFileSync(file, `#!/usr/bin/env node
+const fs = require("node:fs");
+const logFile = ${JSON.stringify(logFile)};
+function log(message) { fs.appendFileSync(logFile, message + "\\n"); }
+if (process.argv.includes("--version")) {
+  console.log("fake csharp-ls 1.0");
+  process.exit(0);
+}
+log("start " + process.pid);
+const docs = new Map();
+let buffer = Buffer.alloc(0);
+function write(message) {
+  const body = JSON.stringify(message);
+  process.stdout.write("Content-Length: " + Buffer.byteLength(body, "utf-8") + "\\r\\n\\r\\n" + body);
+}
+function parse() {
+  while (true) {
+    const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
+    if (headerEnd < 0) return;
+    const header = buffer.subarray(0, headerEnd).toString("utf-8");
+    const match = /Content-Length:\\s*(\\d+)/i.exec(header);
+    if (!match) { buffer = buffer.subarray(headerEnd + 4); continue; }
+    const bodyStart = headerEnd + 4;
+    const bodyEnd = bodyStart + Number(match[1]);
+    if (buffer.length < bodyEnd) return;
+    const message = JSON.parse(buffer.subarray(bodyStart, bodyEnd).toString("utf-8"));
+    buffer = buffer.subarray(bodyEnd);
+    handle(message);
+  }
+}
+function publishDiagnostics(uri, text) {
+  const line = text.includes("FreshDiagnostic") ? 7 : 5;
+  write({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: { uri, diagnostics: [{ range: { start: { line, character: 2 }, end: { line, character: 7 } }, severity: 1, source: "csharp-ls", code: "FAKE", message: "fake diagnostic" }] } });
+}
+function handle(message) {
+  if (message.method === "initialize") {
+    log("initialize");
+    write({ jsonrpc: "2.0", id: message.id, result: { capabilities: { textDocumentSync: 1 } } });
+  } else if (message.method === "textDocument/didOpen") {
+    const doc = message.params?.textDocument;
+    docs.set(doc?.uri, doc?.text || "");
+    log("didOpen " + doc?.uri);
+    publishDiagnostics(doc?.uri, doc?.text || "");
+  } else if (message.method === "textDocument/didChange") {
+    const uri = message.params?.textDocument?.uri;
+    const text = message.params?.contentChanges?.at(-1)?.text || "";
+    docs.set(uri, text);
+    log("didChange " + uri + " v" + message.params?.textDocument?.version);
+    publishDiagnostics(uri, text);
+  } else if (message.method === "textDocument/references") {
+    const uri = message.params?.textDocument?.uri;
+    const text = docs.get(uri) || "";
+    const line = text.includes("FreshCall") ? 12 : 10;
+    log("references line=" + line);
+    write({ jsonrpc: "2.0", id: message.id, result: [{ uri, range: { start: { line, character: 22 }, end: { line, character: 34 } } }] });
+  } else if (message.method === "shutdown") {
+    log("shutdown");
+    write({ jsonrpc: "2.0", id: message.id, result: null });
+  } else if (message.method === "exit") process.exit(0);
 }
 process.stdin.on("data", (chunk) => { buffer = Buffer.concat([buffer, chunk]); parse(); });
 `);
@@ -158,6 +227,121 @@ public class AuthService
 		assert.equal((impact.details.related as any[])[0].evidence, "csharp-ls:textDocument/references");
 		assert.equal((impact.details.related as any[])[0].file, "AuthService.cs");
 	});
+});
+
+test("persistent C# exact references refresh files and restart on project graph changes", async () => {
+	const repo = fixtureRepo();
+	fs.writeFileSync(path.join(repo, "Demo.csproj"), `<Project Sdk="Microsoft.NET.Sdk"></Project>\n`);
+	fs.writeFileSync(path.join(repo, "AuthService.cs"), `namespace Demo;
+
+public class AuthService
+{
+    public bool Authenticate(string token)
+    {
+        return token.Length > 0;
+    }
+
+    public bool Run()
+    {
+        return Authenticate("x");
+    }
+}
+`);
+	const logFile = path.join(repo, "csharp-ls.log");
+	const binDir = path.join(repo, "bin");
+	fs.mkdirSync(binDir, { recursive: true });
+	writeLoggingCSharpLs(path.join(binDir, "csharp-ls"), logFile);
+	try {
+		await withPath(`${binDir}${path.delimiter}${process.env.PATH ?? ""}`, async () => {
+			const env = createCodeIntelEnv({ cwd: repo, persistentLsp: true });
+			const params = { symbols: ["Authenticate"], confirmReferences: "csharp-ls", maxReferenceRoots: 1, maxReferenceResults: 5, maxResults: 20 };
+			const first = await runCodeIntelTool("code_intel_impact_map", params, env);
+			assert.equal((first.details.referenceConfirmation as any).session.reused, false);
+			assert.equal((first.details.related as any[])[0].line, 11);
+
+			fs.writeFileSync(path.join(repo, "AuthService.cs"), `namespace Demo;
+
+public class AuthService
+{
+    public bool Authenticate(string token)
+    {
+        return token.Length > 0;
+    }
+
+    public bool Run()
+    {
+        var marker = "FreshCall";
+        return Authenticate(marker);
+    }
+}
+`);
+			const second = await runCodeIntelTool("code_intel_impact_map", params, env);
+			assert.equal((second.details.referenceConfirmation as any).session.reused, true);
+			assert.equal((second.details.related as any[])[0].line, 13);
+
+			fs.writeFileSync(path.join(repo, "Demo.csproj"), `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>\n`);
+			const third = await runCodeIntelTool("code_intel_impact_map", params, env);
+			assert.equal((third.details.referenceConfirmation as any).session.restarted, true);
+			assert.equal((third.details.related as any[])[0].line, 13);
+		});
+	} finally {
+		await shutdownCSharpLsSessions();
+	}
+	const log = fs.readFileSync(logFile, "utf-8");
+	assert.equal((log.match(/^initialize$/gm) ?? []).length, 2);
+	assert.equal((log.match(/^didOpen /gm) ?? []).length, 2);
+	assert.equal((log.match(/^didChange /gm) ?? []).length, 1);
+	assert.equal((log.match(/^shutdown$/gm) ?? []).length, 2);
+});
+
+test("persistent C# diagnostics force a same-text refresh", async () => {
+	const repo = fixtureRepo();
+	fs.writeFileSync(path.join(repo, "Demo.csproj"), `<Project Sdk="Microsoft.NET.Sdk"></Project>\n`);
+	fs.writeFileSync(path.join(repo, "AuthService.cs"), `namespace Demo;
+
+public class AuthService
+{
+    public bool Run()
+    {
+        return true;
+    }
+}
+`);
+	const logFile = path.join(repo, "csharp-ls-diagnostics.log");
+	const binDir = path.join(repo, "bin");
+	fs.mkdirSync(binDir, { recursive: true });
+	writeLoggingCSharpLs(path.join(binDir, "csharp-ls"), logFile);
+	try {
+		await withPath(`${binDir}${path.delimiter}${process.env.PATH ?? ""}`, async () => {
+			const first = await collectTouchedDiagnostics(repo, ["AuthService.cs"], DEFAULT_CONFIG, undefined, { persistentLsp: true });
+			assert.equal(first.diagnostics[0]?.line, 6);
+			const firstStatus = first.providerStatuses.find((row) => row.provider === "csharp-ls") as any;
+			assert.equal(firstStatus.session.reused, false);
+
+			fs.writeFileSync(path.join(repo, "AuthService.cs"), `namespace Demo;
+
+public class AuthService
+{
+    public bool Run()
+    {
+        var marker = "FreshDiagnostic";
+        return marker.Length > 0;
+    }
+}
+`);
+			const second = await collectTouchedDiagnostics(repo, ["AuthService.cs"], DEFAULT_CONFIG, undefined, { persistentLsp: true });
+			assert.equal(second.diagnostics[0]?.line, 8);
+			const secondStatus = second.providerStatuses.find((row) => row.provider === "csharp-ls") as any;
+			assert.equal(secondStatus.session.reused, true);
+		});
+	} finally {
+		await shutdownCSharpLsSessions();
+	}
+	const log = fs.readFileSync(logFile, "utf-8");
+	assert.equal((log.match(/^initialize$/gm) ?? []).length, 1);
+	assert.equal((log.match(/^didOpen /gm) ?? []).length, 1);
+	assert.equal((log.match(/^didChange /gm) ?? []).length, 1);
+	assert.equal((log.match(/^shutdown$/gm) ?? []).length, 1);
 });
 
 test("standalone registry gates mutation tools unless enabled", async () => {

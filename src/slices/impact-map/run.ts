@@ -39,7 +39,7 @@ function mergeExactReferenceRows(output: Record<string, unknown>, exactRows: Rec
 	output.coverage = { ...coverage, exactReferenceLane: "csharp-ls", exactReferenceRows: exactRows.length };
 }
 
-export async function runImpactMap(params: CodeIntelImpactMapParams, repoRoot: string, config: CodeIntelConfig, signal?: AbortSignal): Promise<Record<string, unknown>> {
+export async function runImpactMap(params: CodeIntelImpactMapParams, repoRoot: string, config: CodeIntelConfig, signal?: AbortSignal, options: { persistentLsp?: boolean } = {}): Promise<Record<string, unknown>> {
 	const detail: ResultDetail = params.detail === "snippets" ? "snippets" : "locations";
 	const defaultMaxResults = detail === "locations" ? Math.min(config.maxResults, IMPACT_DEFAULT_LOCATION_RESULTS) : Math.min(config.maxResults, IMPACT_DEFAULT_SNIPPET_RESULTS);
 	const maxResults = normalizePositiveInteger(params.maxResults, defaultMaxResults, 1, 500);
@@ -59,7 +59,7 @@ export async function runImpactMap(params: CodeIntelImpactMapParams, repoRoot: s
 			params.confirmReferences,
 			Array.isArray(output.roots) ? output.roots : [],
 			repoRoot,
-			{ maxRoots: params.maxReferenceRoots, maxResults: params.maxReferenceResults, timeoutMs, includeDeclarations: params.includeReferenceDeclarations === true },
+			{ maxRoots: params.maxReferenceRoots, maxResults: params.maxReferenceResults, timeoutMs, includeDeclarations: params.includeReferenceDeclarations === true, persistentLsp: options.persistentLsp === true },
 			config,
 			signal,
 		);

@@ -106,7 +106,7 @@ In `auto` mode, code-intel first tries the input as repo-root-relative when that
 
 Broad scans respect git ignore rules by default using tracked plus unignored working-tree files. This keeps build outputs such as C# `obj/` and `bin/` out of normal routing. Explicit file paths remain inspectable even when ignored, and explicit ignored directories can be scanned deliberately. Use `includeIgnored: true` when generated outputs such as source-generator `.g.cs` files should participate in broad candidate discovery.
 
-Long-lived MCP sessions cache parsed files and extracted symbol records by current content hash. The server reads and hashes the file before reusing a cached entry, so edits invalidate cached parse/record data instead of returning stale source facts. For C# impact maps, `confirmReferences: "csharp-ls"` promotes exact csharp-ls reference rows into `related` before syntax-only rows while retaining `referenceConfirmation` details.
+Long-lived MCP sessions cache parsed files and extracted symbol records by current content hash. The server reads and hashes the file before reusing a cached entry, so edits invalidate cached parse/record data instead of returning stale source facts. For C# impact maps, `confirmReferences: "csharp-ls"` promotes exact csharp-ls reference rows into `related` before syntax-only rows while retaining `referenceConfirmation` details. MCP sessions keep a bounded csharp-ls workspace process warm, refresh open file text by content hash with full-document `didChange`, and restart the server when C# project graph files change.
 
 Claude Code cannot currently supply Pi's session-tracked touched files. For `code_intel_post_edit_map`, pass `changedFiles` or `baseRef` explicitly.
 

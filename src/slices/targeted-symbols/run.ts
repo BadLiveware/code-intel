@@ -357,7 +357,7 @@ function enclosingTargetForDiagnostic(diag: Record<string, unknown>, parsed: Par
 	return { diagnostic: diag, target, readHint: readHintForTarget(target, "diagnostic enclosing declaration"), sourceIncluded: false, sourceCompleteness: "locations-only", nextReadRecommended: true, nextReadReason: "diagnostic-location" };
 }
 
-export async function runPostEditMap(params: CodeIntelPostEditMapParams, repoRoot: string, config: CodeIntelConfig, signal?: AbortSignal): Promise<Record<string, unknown>> {
+export async function runPostEditMap(params: CodeIntelPostEditMapParams, repoRoot: string, config: CodeIntelConfig, signal?: AbortSignal, options: { persistentLsp?: boolean } = {}): Promise<Record<string, unknown>> {
 	const started = Date.now();
 	const diagnostics: string[] = [];
 	const requested = normalizeStringArray(params.changedFiles);
@@ -381,7 +381,7 @@ export async function runPostEditMap(params: CodeIntelPostEditMapParams, repoRoo
 			diagnostics.push(...result.diagnostics);
 		}
 	}
-	const impact = params.includeCallers === false ? undefined : await runImpactMap({ changedFiles, detail: "locations", maxResults: params.maxResults, timeoutMs: params.timeoutMs }, repoRoot, config, signal);
+	const impact = params.includeCallers === false ? undefined : await runImpactMap({ changedFiles, detail: "locations", maxResults: params.maxResults, timeoutMs: params.timeoutMs }, repoRoot, config, signal, options);
 	const testCandidates: Record<string, unknown>[] = [];
 	if (params.includeTests !== false) {
 		for (const file of changedFiles.slice(0, 8)) {
@@ -393,7 +393,7 @@ export async function runPostEditMap(params: CodeIntelPostEditMapParams, repoRoo
 		}
 	}
 	const suppliedDiagnostics = normalizePostEditDiagnostics(params.diagnostics);
-	const collectedDiagnostics = params.includeDiagnostics === true ? await collectTouchedDiagnostics(repoRoot, changedFiles, config, signal) : { diagnostics: [], providerStatuses: [], toolDiagnostics: [], limitations: [] };
+	const collectedDiagnostics = params.includeDiagnostics === true ? await collectTouchedDiagnostics(repoRoot, changedFiles, config, signal, options) : { diagnostics: [], providerStatuses: [], toolDiagnostics: [], limitations: [] };
 	diagnostics.push(...collectedDiagnostics.toolDiagnostics);
 	const diagRows = mergeDiagnostics(suppliedDiagnostics, collectedDiagnostics.diagnostics);
 	const diagnosticTargets: Record<string, unknown>[] = [];

@@ -1,10 +1,9 @@
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 import { findExecutable } from "../../../exec.ts";
-import { LspSession, type PublishDiagnosticsParams } from "../../../lsp/lsp-session.ts";
+import type { PublishDiagnosticsParams } from "../../../lsp/lsp-session.ts";
 import { semanticProviderMetadata } from "../../../lsp/provider-metadata.ts";
-import { csharpLsWorkspaceRoot } from "../../../lsp/providers/csharp-ls-lsp.ts";
-import { uriToRepoFile } from "../../../lsp/uri.ts";
+import { csharpLsWorkspaceRoot, withCSharpLsSession } from "../../../lsp/providers/csharp-ls-session.ts";
+import { repoFileToUri, uriToRepoFile } from "../../../lsp/uri.ts";
 import { ensureInsideRoot } from "../../../repo.ts";
 import type { CodeIntelConfig } from "../../../types.ts";
 import { isRecord } from "../../../util.ts";
@@ -83,7 +82,7 @@ function normalizeDiagnostic(repoRoot: string, params: PublishDiagnosticsParams 
 	};
 }
 
-export async function collectCSharpLsDiagnostics(repoRoot: string, changedFiles: string[], config: CodeIntelConfig, signal?: AbortSignal): Promise<CSharpLsDiagnosticCollectionResult> {
+export async function collectCSharpLsDiagnostics(repoRoot: string, changedFiles: string[], config: CodeIntelConfig, signal?: AbortSignal, options: { persistentLsp?: boolean } = {}): Promise<CSharpLsDiagnosticCollectionResult> {
 	const safeFiles = csharpFiles(changedFiles);
 	const limitations = [
 		"csharp-ls diagnostics are collected from publishDiagnostics for touched C# files only; this is not a project-wide build validation run.",
@@ -101,38 +100,38 @@ export async function collectCSharpLsDiagnostics(repoRoot: string, changedFiles:
 	const toolDiagnostics: string[] = [];
 	let statusDiagnostic: string | undefined;
 	const targetFiles = new Set(safeFiles);
-	const session = new LspSession({ command: executable, cwd: workspaceRoot, repoRoot, rootUri: pathToFileURL(workspaceRoot).href, timeoutMs, signal, name: "csharp-ls" });
+	let sessionDetails: Record<string, unknown> = { persistent: options.persistentLsp === true };
 	try {
-		const init = await session.initialize();
-		if (init.error) {
-			statusDiagnostic = init.error.message ?? "csharp-ls initialize error";
-			toolDiagnostics.push(`csharp-ls initialize: ${statusDiagnostic}`);
-		}
-		for (const file of safeFiles) {
-			if (signal?.aborted) break;
-			let document;
-			try {
-				document = session.didOpen(ensureInsideRoot(repoRoot, file), "csharp");
-			} catch (error) {
-				toolDiagnostics.push(error instanceof Error ? error.message : String(error));
-				continue;
+		const run = await withCSharpLsSession({ repoRoot, workspaceRoot, executable, timeoutMs, persistent: options.persistentLsp === true, signal }, async (lease) => {
+			for (const file of safeFiles) {
+				if (signal?.aborted) break;
+				let document;
+				try {
+					const safeFile = ensureInsideRoot(repoRoot, file);
+					const uri = repoFileToUri(repoRoot, safeFile).uri;
+					lease.session.clearNotifications("textDocument/publishDiagnostics", (message) => (message.params as PublishDiagnosticsParams | undefined)?.uri === uri);
+					document = lease.openDocument(safeFile, "csharp", { forceChange: true });
+				} catch (error) {
+					toolDiagnostics.push(error instanceof Error ? error.message : String(error));
+					continue;
+				}
+				const published = await lease.session.waitForDiagnostics(document.uri, Math.min(timeoutMs, 5_000));
+				for (const row of Array.isArray(published?.diagnostics) ? published.diagnostics : []) {
+					const diagnostic = normalizeDiagnostic(repoRoot, published, row, targetFiles);
+					if (diagnostic) diagnostics.push(diagnostic);
+				}
 			}
-			const published = await session.waitForDiagnostics(document.uri, Math.min(timeoutMs, 5_000));
-			for (const row of Array.isArray(published?.diagnostics) ? published.diagnostics : []) {
-				const diagnostic = normalizeDiagnostic(repoRoot, published, row, targetFiles);
-				if (diagnostic) diagnostics.push(diagnostic);
-			}
-		}
+			return undefined;
+		});
+		toolDiagnostics.push(...run.diagnostics.map((diagnostic) => `csharp-ls: ${diagnostic}`));
+		sessionDetails = { persistent: run.persistent, reused: run.reused, restarted: run.restarted, version: run.version };
 	} catch (error) {
 		statusDiagnostic = error instanceof Error ? error.message : String(error);
 		toolDiagnostics.push(`csharp-ls diagnostics failed: ${statusDiagnostic}`);
-	} finally {
-		await session.shutdown();
-		toolDiagnostics.push(...session.diagnostics.map((diagnostic) => `csharp-ls: ${diagnostic}`));
 	}
 	return {
 		diagnostics,
-		providerStatus: providerStatus(statusDiagnostic ? "error" : "available", safeFiles.length, { executable, workspaceRoot: ensureInsideRoot(repoRoot, workspaceRoot), diagnostic: statusDiagnostic, diagnosticCount: diagnostics.length }),
+		providerStatus: providerStatus(statusDiagnostic ? "error" : "available", safeFiles.length, { executable, workspaceRoot: ensureInsideRoot(repoRoot, workspaceRoot), diagnostic: statusDiagnostic, diagnosticCount: diagnostics.length, session: sessionDetails }),
 		toolDiagnostics,
 		limitations,
 	};

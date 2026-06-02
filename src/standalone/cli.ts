@@ -88,7 +88,7 @@ async function run(argv: string[]): Promise<void> {
 		return;
 	}
 	if (command === "mcp") {
-		const env = createCodeIntelEnv({ cwd: options.cwd, configPath: options.configPath, mutationPolicy: options.mutationPolicy, pathBase: options.pathBase });
+		const env = createCodeIntelEnv({ cwd: options.cwd, configPath: options.configPath, mutationPolicy: options.mutationPolicy, pathBase: options.pathBase, persistentLsp: true });
 		await runCodeIntelMcpServer(env);
 		return;
 	}

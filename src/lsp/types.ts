@@ -62,6 +62,7 @@ export interface ReferenceConfirmationOptions {
 	maxResults?: number;
 	timeoutMs?: number;
 	includeDeclarations?: boolean;
+	persistentLsp?: boolean;
 }
 
 export interface ReferenceConfirmationLimits {
@@ -78,6 +79,9 @@ export interface ReferenceConfirmationContext {
 
 export interface ReferenceConfirmationProviderResult {
 	executable?: string;
+	version?: string;
+	workspaceRoot?: string;
+	session?: Record<string, unknown>;
 	roots: Record<string, unknown>[];
 	references: Record<string, unknown>[];
 	diagnostics: string[];

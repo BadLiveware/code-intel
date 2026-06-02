@@ -48,7 +48,7 @@ export const impactMapPromptGuidelines = [
 export async function runImpactMapTool(params: CodeIntelImpactMapParams, env: CodeIntelEnv, signal?: AbortSignal) {
 	const roots = await resolveRepoRootsFromCwd(env.cwd, params.repoRoot);
 	const effectiveParams = normalizeStandalonePathParams(params as unknown as Record<string, unknown>, env, roots.repoRoot) as unknown as CodeIntelImpactMapParams;
-	const payload = await runImpactMap(effectiveParams, roots.repoRoot, env.config, signal);
+	const payload = await runImpactMap(effectiveParams, roots.repoRoot, env.config, signal, { persistentLsp: env.persistentLsp === true });
 	if (roots.diagnostics.length > 0) {
 		payload.diagnostics = [...roots.diagnostics, ...(Array.isArray(payload.diagnostics) ? payload.diagnostics : [])];
 	}

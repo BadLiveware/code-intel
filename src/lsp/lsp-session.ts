@@ -68,12 +68,25 @@ export class LspSession {
 		return document;
 	}
 
+	didChange(document: OpenedTextDocument, text: string, version: number): OpenedTextDocument {
+		const updated = { ...document, text, version };
+		this.client.notify("textDocument/didChange", {
+			textDocument: { uri: updated.uri, version: updated.version },
+			contentChanges: [{ text }],
+		});
+		return updated;
+	}
+
 	async references(document: Pick<OpenedTextDocument, "uri">, line: number, character: number, includeDeclaration: boolean, timeoutMs?: number): Promise<JsonRpcMessage> {
 		return await this.client.request("textDocument/references", {
 			textDocument: { uri: document.uri },
 			position: { line, character },
 			context: { includeDeclaration },
 		}, timeoutMs);
+	}
+
+	clearNotifications(method?: string, predicate?: (message: JsonRpcMessage) => boolean): void {
+		this.client.clearNotifications(method, predicate);
 	}
 
 	async waitForDiagnostics(uri: string, timeoutMs: number): Promise<PublishDiagnosticsParams | undefined> {
