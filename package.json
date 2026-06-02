@@ -22,8 +22,6 @@
   "files": [
     "README.md",
     "LICENSE",
-    "CONTRIBUTING.md",
-    "SECURITY.md",
     "dist",
     "docs",
     "package.json"

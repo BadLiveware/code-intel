@@ -106,9 +106,3 @@ npm run ci
 ```
 
 CI runs on Node.js 24 because the source test suite uses Node's built-in test runner with `node --experimental-strip-types` for TypeScript test files. The built CLI/MCP path is validated by `npm run build`, `npm run smoke:cli`, and `npm run pack:dry-run`.
-
-## Project policy
-
-- License: [MIT](LICENSE)
-- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
-- Security reports: [SECURITY.md](SECURITY.md)
