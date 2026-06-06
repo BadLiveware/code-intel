@@ -39,6 +39,10 @@
     "./standalone": {
       "types": "./dist/standalone/mcp.d.ts",
       "import": "./dist/standalone/mcp.js"
+    },
+    "./pi-integration": {
+      "types": "./dist/pi-integration.d.ts",
+      "import": "./dist/pi-integration.js"
     }
   },
   "scripts": {

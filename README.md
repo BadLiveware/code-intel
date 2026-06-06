@@ -90,6 +90,12 @@ Long-lived MCP sessions cache parsed files and extracted symbol records by curre
 
 For C# impact maps, `confirmReferences: "csharp-ls"` promotes exact csharp-ls reference rows into the returned `related` candidates before syntax-only rows, while preserving the separate `referenceConfirmation` details for diagnostics and coverage. Long-lived MCP sessions keep a bounded csharp-ls workspace session warm, refresh open file text by content hash with full-document `didChange`, and restart the server when C# project graph files change.
 
+`code_intel_post_edit_map` compact output starts with next read/validation actions before declaration details. Its structured details include `changedFileContexts`, `projectBoundaryFiles`, `nonSymbolChangedFiles`, and `validationHints` so project/build changes such as `.csproj` files stay visible even when they do not produce declaration symbols.
+
+Post-edit diagnostic rows include `provenance`, `provider`, `source`, `freshness`, and `baselineStatus`. Caller-supplied diagnostics default to `freshness: "unknown"`; collected diagnostics report the provider confidence they can cheaply establish. `baselineStatus: "not-compared"` means the row is current touched-file evidence, not proof that the diagnostic is newly introduced. Post-edit results also include `phaseTimings`; compact output renders phase timing only when a phase is slow, failed, or aborted, and completed phase rows are preserved in partial results.
+
+`code_intel_repo_route` ranks path, declaration-like, source literal, test, and documentation evidence separately. Broad or truncated queries return concise narrowing guidance; generic terms such as `load` or `run` are useful only when paired with domain terms or scoped `paths`. When only a small remainder is truncated, the result includes `remainingCount` and `nextOffset`; rerun with the same query plus `offset: nextOffset` to inspect the next page without increasing `maxResults` or reprinting page 1.
+
 ## Configuration
 
 Standalone config is loaded in this order:

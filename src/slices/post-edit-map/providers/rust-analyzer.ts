@@ -74,6 +74,7 @@ function normalizeDiagnostic(repoRoot: string, uri: string | undefined, row: unk
 		endColumn: endCharacter === undefined ? undefined : endCharacter + 1,
 		severity: severity(row.severity),
 		source: stringValue(row.source) ?? "rust-analyzer",
+		provider: "rust-analyzer",
 		code: diagnosticCode(row.code),
 		message: stringValue(row.message),
 		provenance: "collected",

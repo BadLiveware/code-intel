@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { test } from "node:test";
+import { compactCodeIntelOutput } from "../src/compact-output.ts";
 import { shutdownCSharpLsSessions } from "../src/lsp/providers/csharp-ls-session.ts";
 import { collectTouchedDiagnostics } from "../src/slices/post-edit-map/diagnostics.ts";
+import { runPostEditMap } from "../src/slices/targeted-symbols/run.ts";
 import { createCodeIntelEnv } from "../src/standalone/env.ts";
 import { listCodeIntelToolSpecs, runCodeIntelTool } from "../src/tool-registry.ts";
 import { DEFAULT_CONFIG } from "../src/types.ts";
@@ -181,6 +183,69 @@ test("broad scans respect gitignore but allow generated-output opt-in", async ()
 	assert.equal((impactExplicit.details.related as any[]).some((row) => row.file === "obj/GeneratedThing.g.ts"), true);
 });
 
+test("repo route ranks exact source evidence above broad docs and tests", async () => {
+	const repo = fixtureRepo();
+	fs.mkdirSync(path.join(repo, "src", "auth"), { recursive: true });
+	fs.mkdirSync(path.join(repo, "docs"), { recursive: true });
+	fs.mkdirSync(path.join(repo, "tests"), { recursive: true });
+	fs.writeFileSync(path.join(repo, "src", "auth", "session.ts"), `export function authenticateUser(token: string) {\n  return token.length > 0\n}\n`);
+	fs.writeFileSync(path.join(repo, "docs", "authentication.md"), `# Authentication\n\nUse auth to authenticate users. Auth docs mention auth repeatedly.\n`);
+	fs.writeFileSync(path.join(repo, "tests", "auth.test.ts"), `import { authenticateUser } from "../src/auth/session"\n\ntest("auth", () => authenticateUser("token"))\n`);
+	fs.writeFileSync(path.join(repo, "notes.txt"), `auth authenticate authentication auth\n`);
+	const env = createCodeIntelEnv({ cwd: repo });
+
+	const route = await runCodeIntelTool("code_intel_repo_route", { terms: ["auth", "authenticate"], maxResults: 20, maxMatchesPerFile: 5 }, env);
+	const candidates = route.details.candidates as any[];
+	const source = candidates.find((row) => row.file === "src/auth/session.ts");
+	const doc = candidates.find((row) => row.file === "docs/authentication.md");
+	const testFile = candidates.find((row) => row.file === "tests/auth.test.ts");
+	assert.ok(source, "source candidate should be returned");
+	assert.ok(doc, "doc candidate should be returned");
+	assert.ok(testFile, "test candidate should be returned");
+	assert.equal(source.evidence.some((row: any) => row.kind === "declaration"), true);
+	assert.equal(source.score > doc.score, true);
+	assert.equal(source.score > testFile.score, true);
+
+	const firstPage = await runCodeIntelTool("code_intel_repo_route", { terms: ["auth", "authenticate"], maxResults: 5, maxMatchesPerFile: 5 }, env);
+	assert.equal((firstPage.details.summary as any).remainingCount, 1);
+	assert.equal((firstPage.details.summary as any).nextOffset, 5);
+	assert.match(firstPage.contentText, /more: 1 remaining; rerun with offset=5/);
+	assert.match(firstPage.contentText, /Only 1 more candidate\(s\) remain; rerun with offset=5/);
+	const secondPage = await runCodeIntelTool("code_intel_repo_route", { terms: ["auth", "authenticate"], maxResults: 5, offset: 5, maxMatchesPerFile: 5 }, env);
+	assert.equal((secondPage.details.summary as any).offset, 5);
+	assert.equal((secondPage.details.summary as any).remainingCount, 0);
+	assert.equal((secondPage.details.candidates as any[]).length, 1);
+	assert.equal((firstPage.details.candidates as any[]).some((row) => row.file === (secondPage.details.candidates as any[])[0].file), false);
+	assert.match(secondPage.contentText, /^OK repo_route .*\nsummary: .* offset=5 /);
+
+	const narrowRoute = await runCodeIntelTool("code_intel_repo_route", { terms: ["auth", "authenticate"], maxResults: 2, maxMatchesPerFile: 5 }, env);
+	assert.equal((narrowRoute.details.guidance as string[]).some((line) => /narrow/i.test(line) || /truncated/i.test(line)), true);
+	assert.match(narrowRoute.contentText, /narrow: .*paths.*exact API\/symbol terms/);
+});
+
+test("repo route demotes generic helper matches when domain evidence is stronger", async () => {
+	const repo = fixtureRepo();
+	fs.mkdirSync(path.join(repo, "src", "payment"), { recursive: true });
+	fs.mkdirSync(path.join(repo, "src", "helpers"), { recursive: true });
+	fs.mkdirSync(path.join(repo, "tests"), { recursive: true });
+	fs.writeFileSync(path.join(repo, "src", "payment", "payment-loader.ts"), `export function loadPaymentConfig(path: string) {\n  return { path }\n}\n`);
+	fs.writeFileSync(path.join(repo, "src", "helpers", "load.ts"), `export function load(value: string) {\n  return value\n}\n`);
+	fs.writeFileSync(path.join(repo, "src", "helpers", "run.ts"), `export function run() {\n  return load("x")\n}\n`);
+	fs.writeFileSync(path.join(repo, "tests", "payment-load.test.ts"), `import { loadPaymentConfig } from "../src/payment/payment-loader"\nloadPaymentConfig("fixture")\n`);
+	const env = createCodeIntelEnv({ cwd: repo });
+
+	const route = await runCodeIntelTool("code_intel_repo_route", { terms: ["load", "payment"], maxResults: 20, maxMatchesPerFile: 5 }, env);
+	const candidates = route.details.candidates as any[];
+	const domain = candidates.find((row) => row.file === "src/payment/payment-loader.ts");
+	const genericHelper = candidates.find((row) => row.file === "src/helpers/load.ts");
+	assert.ok(domain, "domain source candidate should be returned");
+	assert.ok(genericHelper, "generic helper candidate should be returned");
+	assert.equal(domain.score > genericHelper.score, true);
+	assert.equal(genericHelper.evidence.some((row: any) => row.term === "load" && row.generic === true), true);
+	assert.equal((route.details.guidance as string[]).some((line) => /Generic term\(s\) load/.test(line)), true);
+	assert.match(route.contentText, /narrow: .*Generic term\(s\) load/);
+});
+
 test("parsed record cache invalidates when file content changes", async () => {
 	const repo = fixtureRepo();
 	const env = createCodeIntelEnv({ cwd: repo });
@@ -342,6 +407,121 @@ public class AuthService
 	assert.equal((log.match(/^didOpen /gm) ?? []).length, 1);
 	assert.equal((log.match(/^didChange /gm) ?? []).length, 1);
 	assert.equal((log.match(/^shutdown$/gm) ?? []).length, 1);
+});
+
+test("post-edit diagnostics expose provenance, provider, and freshness confidence", async () => {
+	const repo = fixtureRepo();
+	fs.writeFileSync(path.join(repo, "broken.ts"), `export const value: number = "wrong";\n`);
+	const env = createCodeIntelEnv({ cwd: repo });
+
+	const result = await runCodeIntelTool("code_intel_post_edit_map", {
+		changedFiles: ["broken.ts"],
+		includeDiagnostics: true,
+		includeCallers: false,
+		includeTests: false,
+		diagnostics: [{ path: "broken.ts", line: 1, column: 14, severity: "warning", source: "eslint", provider: "eslint", code: "no-explicit-any", message: "supplied diagnostic" }],
+		maxResults: 20,
+	}, env);
+	assert.equal(result.details.ok, true);
+	const rows = result.details.touchedDiagnostics as any[];
+	const supplied = rows.find((row) => row.code === "no-explicit-any");
+	assert.equal(supplied.provenance, "supplied");
+	assert.equal(supplied.source, "eslint");
+	assert.equal(supplied.provider, "eslint");
+	assert.equal(supplied.freshness, "unknown");
+	assert.equal(supplied.baselineStatus, "not-compared");
+	const collected = rows.find((row) => row.source === "typescript" && row.code === "TS2322");
+	assert.equal(collected.provider, "typescript");
+	assert.equal(collected.provenance, "collected");
+	assert.equal(collected.freshness, "current-workspace-files");
+	assert.equal(collected.baselineStatus, "not-compared");
+	assert.equal((result.details.diagnosticProviders as any[]).some((row) => row.provider === "typescript" && row.freshness === "current-workspace-files" && row.baselineStatus === "not-compared"), true);
+});
+
+test("post-edit partial phase metadata preserves completed results", async () => {
+	const repo = fixtureRepo();
+	const result = await runPostEditMap({
+		changedFiles: ["main.ts"],
+		includeDiagnostics: true,
+		diagnostics: [{ path: "main.ts", line: 1, column: 17, severity: "error", source: "typescript", code: "TS_FAKE" }],
+		maxResults: 20,
+	}, repo, DEFAULT_CONFIG, undefined, { testPhaseFailures: { diagnosticsCollection: "fake diagnostics provider failure" } });
+	assert.equal(result.ok, true);
+	assert.equal(result.partial, true);
+	assert.equal((result.changedSymbols as any[]).length > 0, true);
+	assert.equal((result.related as any[]).length > 0, true);
+	assert.equal(Array.isArray(result.testCandidates), true);
+	assert.equal((result.touchedDiagnostics as any[]).some((row) => row.code === "TS_FAKE" && row.provenance === "supplied"), true);
+	const failedPhase = (result.phaseTimings as any[]).find((row) => row.name === "diagnosticsCollection");
+	assert.equal(failedPhase.status, "failed");
+	assert.equal(failedPhase.diagnostic, "fake diagnostics provider failure");
+	assert.equal((result.validationHints as any[]).some((row) => row.kind === "partial" && /completed phase results were preserved/.test(row.message)), true);
+	assert.deepEqual((result.coverage as any).failedPhases, ["diagnosticsCollection"]);
+	const content = compactCodeIntelOutput("post_edit", result);
+	assert.match(content, /phases: diagnosticsCollection failed \d+ms — fake diagnostics provider failure/);
+	assert.match(content, /changed main\.ts:/);
+});
+
+test("post-edit compact output leads with action summary before changed details", () => {
+	const content = compactCodeIntelOutput("post_edit", {
+		ok: true,
+		elapsedMs: 7,
+		changedFiles: ["src/service.ts"],
+		changedFileContexts: [{ file: "src/service.ts", kind: "source", language: "typescript", symbolCount: 1, reason: "Changed declarations extracted.", validationHint: "Read the changed declaration targets." }],
+		changedSymbols: [{ target: { path: "src/service.ts", name: "lowLevelField", range: { startLine: 42, endLine: 42 } } }],
+		related: [{ file: "src/caller.ts", line: 12, kind: "syntax_call", name: "useService" }],
+		testCandidates: [{ file: "src/service.test.ts", score: 30 }],
+		touchedDiagnostics: [{ path: "src/service.ts", line: 4, severity: "error", code: "TS2322" }],
+		diagnosticTargets: [],
+		validationHints: [
+			{ kind: "diagnostics", message: "Inspect 1 touched diagnostic before rerunning validation." },
+			{ kind: "tests", message: "Inspect or run 1 likely test candidate." },
+		],
+		summary: { changedFileCount: 1, changedSymbolCount: 1, relatedCount: 1, testCandidateCount: 1, diagnosticCount: 1, diagnosticTargetCount: 0 },
+		phaseTimings: [{ name: "changedSymbols", status: "passed", elapsedMs: 1, slow: false }],
+		limitations: ["Post-edit maps are locator-mode routing evidence and validation hints; they do not run tests or apply fixes."],
+	});
+	const lines = content.split("\n");
+	assert.match(lines[0], /^OK post_edit_map 7ms files=1$/);
+	assert.match(lines[1], /^next: .*diagnostic.*test candidate/);
+	assert.match(lines[2], /^summary: changed=1 related=1 tests=1 diagnostics=1/);
+	const limitationIndex = lines.findIndex((line) => line.startsWith("limitations: "));
+	const changedIndex = lines.findIndex((line) => line.startsWith("changed "));
+	assert.ok(limitationIndex > 0);
+	assert.ok(changedIndex > limitationIndex);
+	assert.equal(lines.some((line) => line.startsWith("related src/caller.ts:12")), true);
+	assert.equal(lines.some((line) => line.startsWith("test src/service.test.ts")), true);
+	assert.equal(lines.some((line) => line.startsWith("phases: ")), false);
+});
+
+test("post-edit map preserves C# project-boundary and no-symbol changed files", async () => {
+	const repo = fixtureRepo();
+	fs.writeFileSync(path.join(repo, "Demo.csproj"), `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>\n`);
+	fs.mkdirSync(path.join(repo, "Properties"), { recursive: true });
+	fs.writeFileSync(path.join(repo, "Properties", "AssemblyInfo.cs"), `using System.Reflection;\n[assembly: AssemblyTitle("Demo")]\n`);
+	fs.writeFileSync(path.join(repo, "AuthService.cs"), `namespace Demo;\n\npublic class AuthService\n{\n    public bool Authenticate(string token) => token.Length > 0;\n}\n`);
+	fs.writeFileSync(path.join(repo, "AuthServiceTests.cs"), `namespace Demo.Tests;\n\npublic class AuthServiceTests\n{\n    public void CallsAuthenticate()\n    {\n        new Demo.AuthService().Authenticate("x");\n    }\n}\n`);
+	const env = createCodeIntelEnv({ cwd: repo });
+
+	const result = await runCodeIntelTool("code_intel_post_edit_map", { changedFiles: ["Demo.csproj", "Properties/AssemblyInfo.cs"], maxResults: 20 }, env);
+	assert.equal(result.details.ok, true);
+	assert.equal((result.details.summary as any).changedFileCount, 2);
+	assert.equal((result.details.summary as any).changedSymbolCount, 0);
+	assert.equal((result.details.summary as any).projectBoundaryCount, 1);
+	assert.equal((result.details.summary as any).nonSymbolChangedFileCount, 2);
+	assert.deepEqual((result.details.coverage as any).projectBoundaryFiles, ["Demo.csproj"]);
+	assert.deepEqual((result.details.coverage as any).nonSymbolChangedFiles, ["Demo.csproj", "Properties/AssemblyInfo.cs"]);
+	const contexts = result.details.changedFileContexts as any[];
+	assert.equal(contexts.find((row) => row.file === "Demo.csproj")?.kind, "project-boundary");
+	assert.equal(contexts.find((row) => row.file === "Properties/AssemblyInfo.cs")?.kind, "source-no-symbols");
+	const hints = result.details.validationHints as any[];
+	assert.equal(hints.some((row) => row.kind === "changed-files" && /No changed declarations/.test(row.message)), true);
+	assert.equal(hints.some((row) => row.kind === "project-boundary" && row.file === "Demo.csproj"), true);
+	assert.equal(hints.some((row) => row.kind === "direct-inspection" && row.file === "Properties/AssemblyInfo.cs"), true);
+	assert.match(result.contentText, /^OK post_edit_map .*files=2\nnext: .*No changed declarations.*project-boundary/s);
+	assert.match(result.contentText, /summary: changed=0 related=0 tests=0 diagnostics=0 projectBoundary=1 noSymbolFiles=2/);
+	assert.match(result.contentText, /changed-file Demo\.csproj project-boundary/);
+	assert.match(result.contentText, /changed-file Properties\/AssemblyInfo\.cs source-no-symbols/);
 });
 
 test("standalone registry gates mutation tools unless enabled", async () => {

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { CodeIntelConfig, CodeIntelPostEditMapParams, CodeIntelReadSymbolParams, ResultDetail } from "../../types.ts";
+import type { CodeIntelConfig, CodeIntelPostEditMapParams, CodeIntelPostEditPhaseName, CodeIntelPostEditPhaseTiming, CodeIntelReadSymbolParams, ResultDetail } from "../../types.ts";
 import { LANGUAGE_CAPABILITIES, languageCapability, languageSpec } from "../../languages.ts";
 import { changedFilesFromBase, ensureInsideRoot } from "../../repo.ts";
 import { runImpactMap } from "../impact-map/run.ts";
@@ -29,6 +29,97 @@ export type ResolvedSelection = {
 function languageForFile(file: string): string | undefined {
 	const ext = path.extname(file);
 	return LANGUAGE_CAPABILITIES.find((capability) => capability.extensions.includes(ext))?.id;
+}
+
+type ChangedFileContext = {
+	file: string;
+	kind: "source" | "source-no-symbols" | "source-unparsed" | "project-boundary" | "unsupported";
+	language?: string;
+	symbolCount?: number;
+	reason: string;
+	validationHint: string;
+};
+
+const PROJECT_BOUNDARY_EXTENSIONS = new Set([".csproj", ".fsproj", ".vbproj", ".sln", ".props", ".targets"]);
+const PROJECT_BOUNDARY_FILENAMES = new Set(["directory.build.props", "directory.build.targets", "global.json", "nuget.config"]);
+
+function isProjectBoundaryFile(file: string): boolean {
+	const base = path.basename(file).toLowerCase();
+	return PROJECT_BOUNDARY_EXTENSIONS.has(path.extname(file).toLowerCase()) || PROJECT_BOUNDARY_FILENAMES.has(base);
+}
+
+function changedFileContext(file: string, result: Awaited<ReturnType<typeof symbolsForFile>> | undefined, extractionEnabled: boolean, parsedCapReached: boolean): ChangedFileContext {
+	const language = result?.language ?? languageForFile(file);
+	if (isProjectBoundaryFile(file)) {
+		return {
+			file,
+			kind: "project-boundary",
+			language,
+			symbolCount: 0,
+			reason: "Project/build graph file; no declaration symbols are expected.",
+			validationHint: "Project-boundary changed; run or inspect the owning project build/tests because project-boundary changes can affect many source files.",
+		};
+	}
+	if (!language) {
+		return {
+			file,
+			kind: "unsupported",
+			symbolCount: 0,
+			reason: "No configured parser/language for this changed file.",
+			validationHint: "Inspect the file directly and use project-native validation for this file type.",
+		};
+	}
+	if (!extractionEnabled) {
+		return {
+			file,
+			kind: "source",
+			language,
+			reason: "Changed-symbol extraction was disabled for this post-edit map.",
+			validationHint: "Use source reads or project-native validation because changed declarations were not extracted.",
+		};
+	}
+	if (parsedCapReached && !result) {
+		return {
+			file,
+			kind: "source-unparsed",
+			language,
+			symbolCount: 0,
+			reason: "Changed-file symbol extraction cap was reached before this file was parsed.",
+			validationHint: "Inspect this file directly or rerun with a narrower changed-file set.",
+		};
+	}
+	if (!result?.parsed) {
+		return {
+			file,
+			kind: "source-unparsed",
+			language,
+			symbolCount: 0,
+			reason: "Source file could not be parsed into declaration records.",
+			validationHint: "Inspect this file directly and use parser/language diagnostics or project-native validation.",
+		};
+	}
+	if (result.records.length === 0) {
+		return {
+			file,
+			kind: "source-no-symbols",
+			language,
+			symbolCount: 0,
+			reason: "Parsed successfully but no top-level declarations were extracted.",
+			validationHint: "Inspect this file directly; no declaration target can stand in for the changed file.",
+		};
+	}
+	return {
+		file,
+		kind: "source",
+		language,
+		symbolCount: result.records.length,
+		reason: "Changed declarations extracted.",
+		validationHint: "Read the changed declaration targets and related/test rows before final validation.",
+	};
+}
+
+function hint(kind: string, message: string, file?: string): Record<string, unknown> {
+	return file ? { kind, file, message } : { kind, message };
 }
 
 function stringValue(value: unknown): string | undefined {
@@ -357,84 +448,237 @@ function enclosingTargetForDiagnostic(diag: Record<string, unknown>, parsed: Par
 	return { diagnostic: diag, target, readHint: readHintForTarget(target, "diagnostic enclosing declaration"), sourceIncluded: false, sourceCompleteness: "locations-only", nextReadRecommended: true, nextReadReason: "diagnostic-location" };
 }
 
-export async function runPostEditMap(params: CodeIntelPostEditMapParams, repoRoot: string, config: CodeIntelConfig, signal?: AbortSignal, options: { persistentLsp?: boolean } = {}): Promise<Record<string, unknown>> {
+type PostEditMapRunOptions = {
+	persistentLsp?: boolean;
+	slowPhaseThresholdMs?: number;
+	testPhaseFailures?: Partial<Record<CodeIntelPostEditPhaseName, string>>;
+};
+
+function phaseStatusForError(signal: AbortSignal | undefined): "failed" | "aborted" {
+	return signal?.aborted ? "aborted" : "failed";
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function recordPhase(phases: CodeIntelPostEditPhaseTiming[], name: CodeIntelPostEditPhaseName, started: number, slowPhaseThresholdMs: number, status: CodeIntelPostEditPhaseTiming["status"], itemCount?: number, diagnostic?: string): void {
+	const elapsedMs = Date.now() - started;
+	phases.push({ name, status, elapsedMs, itemCount, diagnostic, slow: status === "passed" && elapsedMs > slowPhaseThresholdMs });
+}
+
+function throwForTestPhase(name: CodeIntelPostEditPhaseName, options: PostEditMapRunOptions): void {
+	const diagnostic = options.testPhaseFailures?.[name];
+	if (diagnostic) throw new Error(diagnostic);
+}
+
+export async function runPostEditMap(params: CodeIntelPostEditMapParams, repoRoot: string, config: CodeIntelConfig, signal?: AbortSignal, options: PostEditMapRunOptions = {}): Promise<Record<string, unknown>> {
 	const started = Date.now();
+	const slowPhaseThresholdMs = options.slowPhaseThresholdMs ?? 10_000;
+	const phaseTimings: CodeIntelPostEditPhaseTiming[] = [];
 	const diagnostics: string[] = [];
-	const requested = normalizeStringArray(params.changedFiles);
-	const fromBase = await changedFilesFromBase(repoRoot, params.baseRef, config.queryTimeoutMs, config.maxOutputBytes);
-	if (fromBase.diagnostic) diagnostics.push(fromBase.diagnostic);
-	const changedFiles = [...new Set([...requested, ...fromBase.files].map((file) => {
-		try {
-			return ensureInsideRoot(repoRoot, file);
-		} catch (error) {
-			diagnostics.push(error instanceof Error ? error.message : String(error));
-			return undefined;
-		}
-	}).filter((file): file is string => !!file && fs.existsSync(path.join(repoRoot, file))))];
+	let changedFiles: string[] = [];
+	let phaseStarted = Date.now();
+	try {
+		throwForTestPhase("discoverChangedFiles", options);
+		const requested = normalizeStringArray(params.changedFiles);
+		const fromBase = await changedFilesFromBase(repoRoot, params.baseRef, config.queryTimeoutMs, config.maxOutputBytes);
+		if (fromBase.diagnostic) diagnostics.push(fromBase.diagnostic);
+		changedFiles = [...new Set([...requested, ...fromBase.files].map((file) => {
+			try {
+				return ensureInsideRoot(repoRoot, file);
+			} catch (error) {
+				diagnostics.push(errorMessage(error));
+				return undefined;
+			}
+		}).filter((file): file is string => !!file && fs.existsSync(path.join(repoRoot, file))))];
+		recordPhase(phaseTimings, "discoverChangedFiles", phaseStarted, slowPhaseThresholdMs, "passed", changedFiles.length);
+	} catch (error) {
+		const message = errorMessage(error);
+		diagnostics.push(`discoverChangedFiles phase failed: ${message}`);
+		recordPhase(phaseTimings, "discoverChangedFiles", phaseStarted, slowPhaseThresholdMs, phaseStatusForError(signal), 0, message);
+	}
 	const changedSymbols: Array<Record<string, unknown>> = [];
 	const parsedByFile = new Map<string, Awaited<ReturnType<typeof symbolsForFile>>>();
-	if (params.includeChangedSymbols !== false) {
-		for (const file of changedFiles.slice(0, 50)) {
-			const result = await symbolsForFile(repoRoot, file, config, signal);
-			parsedByFile.set(file, result);
-			changedSymbols.push(...result.rows);
-			diagnostics.push(...result.diagnostics);
+	const changedFileSymbolLimit = 50;
+	const extractChangedSymbols = params.includeChangedSymbols !== false;
+	phaseStarted = Date.now();
+	if (extractChangedSymbols) {
+		try {
+			throwForTestPhase("changedSymbols", options);
+			for (const file of changedFiles.slice(0, changedFileSymbolLimit)) {
+				const result = await symbolsForFile(repoRoot, file, config, signal);
+				parsedByFile.set(file, result);
+				changedSymbols.push(...result.rows);
+				diagnostics.push(...result.diagnostics);
+			}
+			recordPhase(phaseTimings, "changedSymbols", phaseStarted, slowPhaseThresholdMs, "passed", changedSymbols.length);
+		} catch (error) {
+			const message = errorMessage(error);
+			diagnostics.push(`changedSymbols phase failed: ${message}`);
+			recordPhase(phaseTimings, "changedSymbols", phaseStarted, slowPhaseThresholdMs, phaseStatusForError(signal), changedSymbols.length, message);
+		}
+	} else {
+		recordPhase(phaseTimings, "changedSymbols", phaseStarted, slowPhaseThresholdMs, "skipped", 0, "includeChangedSymbols=false");
+	}
+	const changedFileContexts = changedFiles.map((file, index) => changedFileContext(file, parsedByFile.get(file), extractChangedSymbols, index >= changedFileSymbolLimit));
+	const projectBoundaryContexts = changedFileContexts.filter((context) => context.kind === "project-boundary");
+	const noSymbolChangedContexts = changedFileContexts.filter((context) => context.kind !== "source" || context.symbolCount === 0);
+	const directInspectionContexts = changedFileContexts.filter((context) => context.kind === "source-no-symbols" || context.kind === "source-unparsed" || context.kind === "unsupported");
+	let impact: Record<string, unknown> | undefined;
+	phaseStarted = Date.now();
+	if (params.includeCallers === false) {
+		recordPhase(phaseTimings, "impactMap", phaseStarted, slowPhaseThresholdMs, "skipped", 0, "includeCallers=false");
+	} else {
+		try {
+			throwForTestPhase("impactMap", options);
+			impact = await runImpactMap({ changedFiles, detail: "locations", maxResults: params.maxResults, timeoutMs: params.timeoutMs }, repoRoot, config, signal, options);
+			recordPhase(phaseTimings, "impactMap", phaseStarted, slowPhaseThresholdMs, "passed", isRecord(impact) && Array.isArray(impact.related) ? impact.related.length : 0);
+		} catch (error) {
+			const message = errorMessage(error);
+			diagnostics.push(`impactMap phase failed: ${message}`);
+			recordPhase(phaseTimings, "impactMap", phaseStarted, slowPhaseThresholdMs, phaseStatusForError(signal), 0, message);
 		}
 	}
-	const impact = params.includeCallers === false ? undefined : await runImpactMap({ changedFiles, detail: "locations", maxResults: params.maxResults, timeoutMs: params.timeoutMs }, repoRoot, config, signal, options);
 	const testCandidates: Record<string, unknown>[] = [];
+	phaseStarted = Date.now();
 	if (params.includeTests !== false) {
-		for (const file of changedFiles.slice(0, 8)) {
-			const symbolResult = parsedByFile.get(file) ?? await symbolsForFile(repoRoot, file, config, signal);
-			const names = symbolResult.records.map((record) => record.name).slice(0, 12);
-			const testMap = await runTestMap({ path: file, symbols: names, maxResults: Math.min(params.maxResults ?? config.maxResults, 10), timeoutMs: params.timeoutMs, detail: "locations" }, repoRoot, config, signal);
-			for (const row of Array.isArray(testMap.candidates) ? testMap.candidates.filter(isRecord) : []) testCandidates.push(row);
-			diagnostics.push(...(Array.isArray(testMap.diagnostics) ? testMap.diagnostics.map(String) : []));
+		try {
+			throwForTestPhase("testMap", options);
+			for (const file of changedFiles.slice(0, 8)) {
+				const symbolResult = parsedByFile.get(file) ?? await symbolsForFile(repoRoot, file, config, signal);
+				const names = symbolResult.records.map((record) => record.name).slice(0, 12);
+				const testMap = await runTestMap({ path: file, symbols: names, maxResults: Math.min(params.maxResults ?? config.maxResults, 10), timeoutMs: params.timeoutMs, detail: "locations" }, repoRoot, config, signal);
+				for (const row of Array.isArray(testMap.candidates) ? testMap.candidates.filter(isRecord) : []) testCandidates.push(row);
+				diagnostics.push(...(Array.isArray(testMap.diagnostics) ? testMap.diagnostics.map(String) : []));
+			}
+			recordPhase(phaseTimings, "testMap", phaseStarted, slowPhaseThresholdMs, "passed", testCandidates.length);
+		} catch (error) {
+			const message = errorMessage(error);
+			diagnostics.push(`testMap phase failed: ${message}`);
+			recordPhase(phaseTimings, "testMap", phaseStarted, slowPhaseThresholdMs, phaseStatusForError(signal), testCandidates.length, message);
 		}
+	} else {
+		recordPhase(phaseTimings, "testMap", phaseStarted, slowPhaseThresholdMs, "skipped", 0, "includeTests=false");
 	}
 	const suppliedDiagnostics = normalizePostEditDiagnostics(params.diagnostics);
-	const collectedDiagnostics = params.includeDiagnostics === true ? await collectTouchedDiagnostics(repoRoot, changedFiles, config, signal, options) : { diagnostics: [], providerStatuses: [], toolDiagnostics: [], limitations: [] };
-	diagnostics.push(...collectedDiagnostics.toolDiagnostics);
+	let collectedDiagnostics: Awaited<ReturnType<typeof collectTouchedDiagnostics>> = { diagnostics: [], providerStatuses: [], toolDiagnostics: [], limitations: [] };
+	phaseStarted = Date.now();
+	if (params.includeDiagnostics === true) {
+		try {
+			throwForTestPhase("diagnosticsCollection", options);
+			collectedDiagnostics = await collectTouchedDiagnostics(repoRoot, changedFiles, config, signal, options);
+			diagnostics.push(...collectedDiagnostics.toolDiagnostics);
+			recordPhase(phaseTimings, "diagnosticsCollection", phaseStarted, slowPhaseThresholdMs, "passed", collectedDiagnostics.diagnostics.length);
+		} catch (error) {
+			const message = errorMessage(error);
+			diagnostics.push(`diagnosticsCollection phase failed: ${message}`);
+			recordPhase(phaseTimings, "diagnosticsCollection", phaseStarted, slowPhaseThresholdMs, phaseStatusForError(signal), 0, message);
+		}
+	} else {
+		recordPhase(phaseTimings, "diagnosticsCollection", phaseStarted, slowPhaseThresholdMs, "skipped", 0, "includeDiagnostics not requested");
+	}
 	const diagRows = mergeDiagnostics(suppliedDiagnostics, collectedDiagnostics.diagnostics);
 	const diagnosticTargets: Record<string, unknown>[] = [];
+	phaseStarted = Date.now();
 	if (params.includeDiagnostics === true || diagRows.length > 0) {
-		for (const diag of diagRows.slice(0, params.maxResults ?? config.maxResults)) {
-			const file = stringValue(diag.path);
-			if (!file) continue;
-			let safeFile: string;
-			try {
-				safeFile = ensureInsideRoot(repoRoot, file);
-			} catch (error) {
-				diagnostics.push(error instanceof Error ? error.message : String(error));
-				continue;
+		try {
+			throwForTestPhase("diagnosticTargets", options);
+			for (const diag of diagRows.slice(0, params.maxResults ?? config.maxResults)) {
+				const file = stringValue(diag.path);
+				if (!file) continue;
+				let safeFile: string;
+				try {
+					safeFile = ensureInsideRoot(repoRoot, file);
+				} catch (error) {
+					diagnostics.push(errorMessage(error));
+					continue;
+				}
+				const symbolResult = parsedByFile.get(safeFile) ?? await symbolsForFile(repoRoot, safeFile, config, signal);
+				if (symbolResult.parsed) {
+					const target = enclosingTargetForDiagnostic(diag as Record<string, unknown>, symbolResult.parsed, symbolResult.records, repoRoot);
+					if (target) diagnosticTargets.push(target);
+				}
 			}
-			const symbolResult = parsedByFile.get(safeFile) ?? await symbolsForFile(repoRoot, safeFile, config, signal);
-			if (symbolResult.parsed) {
-				const target = enclosingTargetForDiagnostic(diag as Record<string, unknown>, symbolResult.parsed, symbolResult.records, repoRoot);
-				if (target) diagnosticTargets.push(target);
-			}
+			recordPhase(phaseTimings, "diagnosticTargets", phaseStarted, slowPhaseThresholdMs, "passed", diagnosticTargets.length);
+		} catch (error) {
+			const message = errorMessage(error);
+			diagnostics.push(`diagnosticTargets phase failed: ${message}`);
+			recordPhase(phaseTimings, "diagnosticTargets", phaseStarted, slowPhaseThresholdMs, phaseStatusForError(signal), diagnosticTargets.length, message);
 		}
+	} else {
+		recordPhase(phaseTimings, "diagnosticTargets", phaseStarted, slowPhaseThresholdMs, "skipped", 0, "no diagnostics to target");
 	}
+	const phaseProblems = phaseTimings.filter((phase) => phase.status === "failed" || phase.status === "aborted");
+	const slowPhases = phaseTimings.filter((phase) => phase.slow);
 	const uniqueTestCandidates = [...new Map(testCandidates.map((row) => [String(row.file ?? ""), row])).values()].slice(0, params.maxResults ?? config.maxResults);
 	const relatedRows = isRecord(impact) && Array.isArray(impact.related) ? impact.related : [];
+	const validationHints: Record<string, unknown>[] = [];
+	if (phaseProblems.length > 0) validationHints.push(hint("partial", `Partial post-edit map: ${phaseProblems.map((phase) => `${phase.name} ${phase.status}`).join(", ")}; completed phase results were preserved.`));
+	if (diagnosticTargets.length > 0) validationHints.push(hint("diagnostics", `Read ${diagnosticTargets.length} diagnostic target(s) before rerunning validation.`));
+	else if (diagRows.length > 0) validationHints.push(hint("diagnostics", `Inspect ${diagRows.length} touched diagnostic(s); no enclosing declaration target was found for at least one diagnostic.`));
+	if (relatedRows.length > 0) validationHints.push(hint("related", `Read ${Math.min(relatedRows.length, params.maxResults ?? config.maxResults)} related caller/consumer row(s) before final validation.`));
+	if (uniqueTestCandidates.length > 0) validationHints.push(hint("tests", `Inspect or run ${uniqueTestCandidates.length} likely test candidate(s).`));
+	for (const context of projectBoundaryContexts.slice(0, 5)) validationHints.push(hint("project-boundary", context.validationHint, context.file));
+	for (const context of directInspectionContexts.slice(0, 5)) validationHints.push(hint("direct-inspection", context.validationHint, context.file));
+	if (changedFiles.length > 0 && changedSymbols.length === 0) validationHints.unshift(hint("changed-files", "No changed declarations were extracted; inspect changed files directly and use project-native validation."));
+	if (slowPhases.length > 0) validationHints.push(hint("timing", `Slow post-edit phase(s): ${slowPhases.map((phase) => `${phase.name} ${phase.elapsedMs}ms`).join(", ")}.`));
 	return {
 		ok: true,
 		repoRoot,
 		changedFiles,
+		changedFileContexts,
+		projectBoundaryFiles: projectBoundaryContexts.map((context) => ({ file: context.file, reason: context.reason, validationHint: context.validationHint })),
+		nonSymbolChangedFiles: noSymbolChangedContexts.map((context) => ({ file: context.file, kind: context.kind, reason: context.reason, validationHint: context.validationHint })),
+		validationHints,
+		phaseTimings,
+		partial: phaseProblems.length > 0,
 		sourceIncluded: false,
 		sourceCompleteness: "locations-only",
 		nextReadRecommended: true,
-		nextReadReason: "post-edit-validation-context",
+		nextReadReason: phaseProblems.length > 0 ? "partial-post-edit-validation-context" : "post-edit-validation-context",
 		changedSymbols,
 		related: relatedRows,
 		testCandidates: uniqueTestCandidates,
 		touchedDiagnostics: diagRows,
 		diagnosticTargets,
 		diagnosticProviders: collectedDiagnostics.providerStatuses,
-		summary: { changedFileCount: changedFiles.length, changedSymbolCount: changedSymbols.length, relatedCount: relatedRows.length, testCandidateCount: uniqueTestCandidates.length, diagnosticCount: diagRows.length, diagnosticTargetCount: diagnosticTargets.length, ...summarizeFileDistribution(changedSymbols.map((row) => isRecord(row.target) ? { file: row.target.path } : row)) },
-		coverage: { truncated: changedFiles.length > 50 || changedSymbols.length > (params.maxResults ?? config.maxResults), diagnosticsAvailable: diagRows.length > 0, diagnosticsCollected: params.includeDiagnostics === true, unsupportedFiles: changedFiles.filter((file) => !languageForFile(file)) },
+		summary: {
+			changedFileCount: changedFiles.length,
+			changedSymbolCount: changedSymbols.length,
+			relatedCount: relatedRows.length,
+			testCandidateCount: uniqueTestCandidates.length,
+			diagnosticCount: diagRows.length,
+			diagnosticTargetCount: diagnosticTargets.length,
+			projectBoundaryCount: projectBoundaryContexts.length,
+			nonSymbolChangedFileCount: noSymbolChangedContexts.length,
+			phaseCount: phaseTimings.length,
+			failedPhaseCount: phaseProblems.filter((phase) => phase.status === "failed").length,
+			abortedPhaseCount: phaseProblems.filter((phase) => phase.status === "aborted").length,
+			slowPhaseCount: slowPhases.length,
+			...summarizeFileDistribution(changedSymbols.map((row) => isRecord(row.target) ? { file: row.target.path } : row)),
+		},
+		coverage: {
+			truncated: changedFiles.length > changedFileSymbolLimit || changedSymbols.length > (params.maxResults ?? config.maxResults),
+			diagnosticsAvailable: diagRows.length > 0,
+			diagnosticsCollected: params.includeDiagnostics === true,
+			partial: phaseProblems.length > 0,
+			slowPhases: slowPhases.map((phase) => phase.name),
+			failedPhases: phaseProblems.filter((phase) => phase.status === "failed").map((phase) => phase.name),
+			abortedPhases: phaseProblems.filter((phase) => phase.status === "aborted").map((phase) => phase.name),
+			unsupportedFiles: changedFiles.filter((file) => !languageForFile(file)),
+			projectBoundaryFiles: projectBoundaryContexts.map((context) => context.file),
+			nonSymbolChangedFiles: noSymbolChangedContexts.map((context) => context.file),
+		},
 		diagnostics,
-		limitations: ["Post-edit maps are locator-mode routing evidence and validation hints; they do not run tests or apply fixes.", "Collected diagnostics are current touched-file diagnostics, not baseline-compared proof that the issue is new.", ...collectedDiagnostics.limitations],
+		limitations: [
+			"Post-edit maps are locator-mode routing evidence and validation hints; they do not run tests or apply fixes.",
+			"Collected diagnostics are current touched-file diagnostics, not baseline-compared proof that the issue is new.",
+			...(phaseProblems.length ? [`${phaseProblems.length} post-edit phase(s) were partial; completed phase results are preserved but failed/aborted phase output may be incomplete.`] : []),
+			...(projectBoundaryContexts.length ? [`${projectBoundaryContexts.length} changed project/build boundary file(s) do not map to declarations; validate with project-native build/test commands.`] : []),
+			...(directInspectionContexts.length ? [`${directInspectionContexts.length} changed file(s) produced no declaration target; inspect them directly or rerun with a narrower source scope.`] : []),
+			...collectedDiagnostics.limitations,
+		],
 		elapsedMs: Date.now() - started,
 	};
 }

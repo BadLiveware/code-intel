@@ -62,6 +62,8 @@ export const postEditMapToolSpec: CodeIntelToolSpec<CodeIntelPostEditMapParams> 
 		"Use returned readHints or code_intel_read_symbol when source is needed for follow-up inspection.",
 		"Use includeDiagnostics:true when current touched-file diagnostics would help decide the next fix or validation step.",
 		"Use diagnostic-focused targets to prioritize source reads and fixes; pair the result with project-native validation when needed.",
+		"Treat diagnostic provenance/freshness as trust context: supplied diagnostics default to unknown freshness, collected diagnostics are not baseline-compared proof.",
+		"If phaseTimings or validationHints report a partial, failed, aborted, or slow phase, rely on completed rows that remain present but validate the missing phase separately.",
 		"In standalone/Claude Code use, pass changedFiles or baseRef explicitly because Pi's touched-file session tracker is not available.",
 	],
 	inputSchema: objectSchema({

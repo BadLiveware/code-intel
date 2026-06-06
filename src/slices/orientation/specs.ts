@@ -71,11 +71,12 @@ export const fileOutlineToolSpec: CodeIntelToolSpec<CodeIntelFileOutlineParams> 
 export const repoRouteToolSpec: CodeIntelToolSpec<CodeIntelRepoRouteParams> = {
 	name: "code_intel_repo_route",
 	title: "Code Intelligence Repo Route",
-	description: "Rank likely files for concept or API terms using bounded path and literal evidence without dumping raw search output.",
+	description: "Rank likely files for concept or API terms using bounded path, declaration-like, and literal evidence without dumping raw search output.",
 	promptSnippet: "Use when you need to find where a concept is implemented before choosing files to read.",
 	promptGuidelines: [
 		"Use code_intel_repo_route after broad overview when you have concept terms such as API names, feature names, or function names but no exact anchor file yet.",
-		"Scope paths for large repositories; route output ranks files by path and literal evidence, not semantic proof.",
+		"Scope paths for large repositories; route output ranks files by path, declaration-like, and literal evidence, not semantic proof.",
+		"If broad-query guidance appears, narrow with paths, split generic terms, or switch to code_intel_local_map once anchors are known.",
 		"Use returned files with code_intel_file_outline, source reads, impact maps, or test maps before making claims.",
 	],
 	inputSchema: objectSchema({
@@ -83,6 +84,7 @@ export const repoRouteToolSpec: CodeIntelToolSpec<CodeIntelRepoRouteParams> = {
 		terms: stringArrayParam("Concept, API, symbol, or domain terms to route, e.g. ['promql', 'over_time']."),
 		paths: stringArrayParam("Repo-relative files or directories to search. Scope this in large repos."),
 		maxResults: maxResultsProperty,
+		offset: numberParam("Pagination offset into the ranked candidates. Use `nextOffset` from a prior truncated result to fetch the next page without increasing maxResults."),
 		maxFiles: numberParam("Maximum files to scan before truncating. Default 20000."),
 		maxMatchesPerFile: numberParam("Maximum literal evidence rows per file. Default 5."),
 		includeIgnored: booleanParam("Include files ignored by git ignore rules during broad routing. Explicit paths are inspectable either way. Default false."),

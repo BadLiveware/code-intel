@@ -52,6 +52,7 @@ function diagnosticFromRule(repoRoot: string, rawFile: string, rule: Record<stri
 		endColumn: column && rangeLength ? column + rangeLength : undefined,
 		severity: "warning",
 		source: "markdownlint-cli2",
+		provider: "markdownlint-cli2",
 		code: stringValue(ruleNames[0]) ?? stringValue(rule.ruleName) ?? stringValue(rule.ruleDescription),
 		message: stringValue(rule.ruleDescription) ?? stringValue(rule.errorDetail) ?? stringValue(rule.message),
 		provenance: "collected",

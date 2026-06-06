@@ -24,6 +24,7 @@ export type NormalizedPostEditDiagnostic = {
 	endColumn?: number;
 	severity?: string;
 	source?: string;
+	provider?: string;
 	code?: string;
 	message?: string;
 	provenance: DiagnosticProvenance;
@@ -75,6 +76,8 @@ export function normalizePostEditDiagnostics(input: unknown, provenance: Diagnos
 		const file = stringValue(row.path) ?? stringValue(row.file);
 		const line = numberValue(row.line) ?? numberValue(row.startLine);
 		if (!file || !line) continue;
+		const source = stringValue(row.source) ?? stringValue(row.provider);
+		const provider = stringValue(row.provider) ?? source;
 		rows.push({
 			path: file,
 			line,
@@ -82,11 +85,12 @@ export function normalizePostEditDiagnostics(input: unknown, provenance: Diagnos
 			endLine: numberValue(row.endLine),
 			endColumn: numberValue(row.endColumn),
 			severity: stringValue(row.severity),
-			source: stringValue(row.source),
+			source,
+			provider,
 			code: diagnosticCode(row.code),
 			message: stringValue(row.message) ?? stringValue(row.text),
-			provenance: stringValue(row.provenance) === "collected" ? "collected" : provenance,
-			freshness: stringValue(row.freshness) ?? (provenance === "collected" ? "current-workspace-files" : "caller-supplied"),
+			provenance,
+			freshness: stringValue(row.freshness) ?? (provenance === "collected" ? "current-workspace-files" : "unknown"),
 			baselineStatus: "not-compared",
 		});
 	}
@@ -163,6 +167,7 @@ function diagnosticLocation(repoRoot: string, diagnostic: ts.Diagnostic): Normal
 		endColumn: end.character + 1,
 		severity: severityForCategory(diagnostic.category),
 		source: "typescript",
+		provider: "typescript",
 		code: diagnosticCode(diagnostic.code),
 		message: messageText(diagnostic.messageText),
 		provenance: "collected",

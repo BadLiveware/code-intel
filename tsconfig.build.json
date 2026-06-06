@@ -12,7 +12,7 @@
     "sourceMap": true,
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "files": ["src/standalone/cli.ts", "src/tool-registry.ts"],
+  "files": ["src/standalone/cli.ts", "src/tool-registry.ts", "src/pi-integration.ts"],
   "include": [],
   "exclude": ["test/**/*.ts", "dist"]
 }

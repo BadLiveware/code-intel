@@ -52,6 +52,7 @@ function parseGoplsCheckLine(repoRoot: string, line: string): NormalizedPostEdit
 		endColumn: match[4] ? Number(match[4]) : undefined,
 		severity: severityFromMessage(message),
 		source: "gopls",
+		provider: "gopls",
 		message,
 		provenance: "collected",
 		freshness: "current-workspace-files",

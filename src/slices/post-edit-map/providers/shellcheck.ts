@@ -54,6 +54,7 @@ function normalizeComment(repoRoot: string, row: unknown): NormalizedPostEditDia
 		endColumn: numberValue(row.endColumn),
 		severity: severity(row.level),
 		source: "shellcheck",
+		provider: "shellcheck",
 		code: code ? `SC${code}` : undefined,
 		message: typeof row.message === "string" ? row.message : undefined,
 		provenance: "collected",

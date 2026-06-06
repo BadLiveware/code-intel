@@ -38,6 +38,7 @@ function parseZshLine(repoRoot: string, defaultFile: string, line: string): Norm
 		line: Number(match[2]),
 		severity: "error",
 		source: "zsh -n",
+		provider: "zsh",
 		message: match[3].trim(),
 		provenance: "collected",
 		freshness: "current-workspace-files",

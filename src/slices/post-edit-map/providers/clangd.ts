@@ -74,6 +74,7 @@ function normalizeDiagnostic(repoRoot: string, params: PublishDiagnosticsParams 
 		endColumn: endCharacter === undefined ? undefined : endCharacter + 1,
 		severity: severity(row.severity),
 		source: stringValue(row.source) ?? "clangd",
+		provider: "clangd",
 		code: diagnosticCode(row.code),
 		message: stringValue(row.message),
 		provenance: "collected",
