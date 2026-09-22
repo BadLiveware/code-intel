@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { CodeIntelConfig, CodeIntelInsertRelativeParams, CodeIntelReadSymbolParams, CodeIntelReplaceSymbolParams } from "../../types.ts";
 import { ensureInsideRoot } from "../../repo.ts";
-import { exactLineSpan, normalizeInsertedText, rangeFromRecord, readHintForTarget, shortHash, sourceHash, type SymbolTarget } from "../../source-range.ts";
+import { exactLineSpan, normalizeInsertedText, rangeFromRecord, shortHash, sourceHash, type SymbolTarget } from "../../source-range.ts";
 import { resolveSymbolSelection } from "../targeted-symbols/run.ts";
 
 function readParams(params: CodeIntelReplaceSymbolParams | CodeIntelInsertRelativeParams): CodeIntelReadSymbolParams {
@@ -79,7 +79,6 @@ export async function runReplaceSymbol(params: CodeIntelReplaceSymbolParams, rep
 		nextReadRecommended: true,
 		nextReadReason: "symbol-mutated-read-if-source-needed",
 		target,
-		readHint: readHintForTarget(target, "replaced symbol range before mutation"),
 		oldHash,
 		newSourceHash: sourceHash(nextSource),
 		summary: { byteDelta: Buffer.byteLength(newText, "utf8") - Buffer.byteLength(span.text, "utf8"), oldByteCount: Buffer.byteLength(span.text, "utf8"), newByteCount: Buffer.byteLength(newText, "utf8") },
@@ -113,7 +112,6 @@ export async function runInsertRelative(params: CodeIntelInsertRelativeParams, r
 		nextReadRecommended: true,
 		nextReadReason: "relative-insert-read-if-source-needed",
 		anchor: target,
-		readHint: readHintForTarget(target, "insert anchor range before mutation"),
 		anchorHash,
 		newSourceHash: sourceHash(nextSource),
 		summary: { byteDelta: Buffer.byteLength(text, "utf8"), insertedByteCount: Buffer.byteLength(text, "utf8"), position: params.position },

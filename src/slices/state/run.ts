@@ -75,7 +75,7 @@ export function statePayload(roots: RepoRoots, loadedConfig: LoadedConfig, statu
 			"Use language-server status to decide when opt-in reference confirmation or post-edit touched-file diagnostics are available.",
 		],
 	};
-	if (languageServers) payload.languageServers = languageServers;
+	if (languageServers && !semanticProviders) payload.languageServers = languageServers;
 	if (semanticProviders) payload.semanticProviders = semanticProviders;
 	if (includeDiagnostics) {
 		payload.diagnostics = [

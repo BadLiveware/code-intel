@@ -1,6 +1,4 @@
 import * as crypto from "node:crypto";
-import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { SymbolRecord } from "./tree-sitter.ts";
 import { isRecord } from "./util.ts";
 
@@ -28,8 +26,8 @@ export interface SymbolTarget {
 	kind?: string;
 	name: string;
 	uri?: string;
-	source: "tree-sitter" | "lsp" | "mixed";
-	positionEncoding: "utf-16";
+	source?: "tree-sitter" | "lsp" | "mixed";
+	positionEncoding?: "utf-16";
 	owner?: string;
 	containerName?: string;
 	type?: string;
@@ -48,15 +46,6 @@ export interface SymbolTarget {
 	rangeHash?: string;
 }
 
-export interface ReadHint {
-	path: string;
-	offset: number;
-	limit: number;
-	reason: string;
-	range: SourceRange;
-	symbolTarget?: SymbolTarget;
-}
-
 export interface SourceSegment {
 	kind: "target" | "context";
 	source: string;
@@ -70,7 +59,6 @@ export interface SourceSegment {
 	omittedLineCount?: number;
 	target: SymbolTarget;
 	range: SourceRange;
-	readHint: ReadHint;
 	reason?: string;
 	evidence?: string;
 }
@@ -269,11 +257,10 @@ function selectionRangeFromSource(source: string | undefined, range: SourceRange
 	return range;
 }
 
-export function buildSymbolTarget(record: SymbolRecord, source?: string, repoRoot?: string, peers?: SymbolRecord[]): SymbolTarget {
+export function buildSymbolTarget(record: SymbolRecord, source?: string, peers?: SymbolRecord[]): SymbolTarget {
 	const range = rangeFromRecord(record);
 	const rangeText = source ? exactLineSlice(source, range) : undefined;
 	const rangeHash = rangeText !== undefined ? shortHash(rangeText) : undefined;
-	const sourceDigest = source !== undefined ? sourceHash(source) : undefined;
 	const signature = record.signature ?? signatureFromSource(source ?? record.text ?? "", source ? range : { startLine: 1, startColumn: 0, endLine: 1, endColumn: 0 }, record.name);
 	const arity = record.arity ?? arityFromSignature(signature);
 	const owner = record.owner || undefined;
@@ -281,20 +268,13 @@ export function buildSymbolTarget(record: SymbolRecord, source?: string, repoRoo
 	const rangeIdentity = [record.file, record.language, record.kind, owner ?? "", record.name, signature ?? "", range.startLine, range.startColumn, range.endLine, range.endColumn, rangeHash ?? ""].join("\0");
 	const rangeId = shortHash(rangeIdentity);
 	const selectionRange = selectionRangeFromSource(source, range, record.name);
-	const uri = repoRoot ? pathToFileURL(path.join(repoRoot, record.file)).href : undefined;
 	return {
 		path: record.file,
-		uri,
-		language: record.language,
-		source: "tree-sitter",
-		positionEncoding: "utf-16",
 		kind: record.kind,
 		lspKind: lspKind(record.kind),
 		name: record.name,
 		owner,
-		containerName: owner,
 		type: record.type || undefined,
-		detail: signature,
 		signature,
 		arity,
 		exported: record.exported,
@@ -304,29 +284,20 @@ export function buildSymbolTarget(record: SymbolRecord, source?: string, repoRoo
 		symbolRef: `${record.file}#${safeRefPart(record.kind)}#${safeRefPart(owner ? `${owner}.${record.name}` : record.name)}@${stableId}`,
 		rangeId,
 		relocation: relocationHints(record, stableId, source, peers),
-		sourceHash: sourceDigest,
 		rangeHash,
 	};
-}
-
-export function readHintForTarget(target: SymbolTarget, reason = "target declaration range"): ReadHint {
-	return { path: target.path, offset: target.range.startLine, limit: rangeLineCount(target.range), reason, range: target.range, symbolTarget: target };
 }
 
 export function locatorMetadata(nextReadReason = "source-not-included"): LocatorMetadata {
 	return { sourceIncluded: false, sourceCompleteness: "locations-only", nextReadRecommended: true, nextReadReason };
 }
 
-export function rowWithTarget(record: SymbolRecord, source?: string, repoRoot?: string, peers?: SymbolRecord[]): Record<string, unknown> {
-	const target = buildSymbolTarget(record, source, repoRoot, peers);
-	const row: Record<string, unknown> = { kind: record.kind, name: record.name, line: record.line, column: record.column, endLine: record.endLine, endColumn: record.endColumn, symbolTarget: target, readHint: readHintForTarget(target), sourceIncluded: false, sourceCompleteness: "locations-only", nextReadRecommended: true, nextReadReason: "source-not-included" };
-	if (record.owner) {
-		row.owner = record.owner;
-		row.containerName = record.owner;
-	}
+export function rowWithTarget(record: SymbolRecord, source?: string, peers?: SymbolRecord[]): Record<string, unknown> {
+	const target = buildSymbolTarget(record, source, peers);
+	const row: Record<string, unknown> = { kind: record.kind, name: record.name, line: record.line, column: record.column, endLine: record.endLine, endColumn: record.endColumn, symbolTarget: target };
+	if (record.owner) row.owner = record.owner;
 	if (record.exported !== undefined) row.exported = record.exported;
 	if (record.type) row.type = record.type;
-	if (target.detail) row.detail = target.detail;
 	if (target.signature) row.signature = target.signature;
 	if (target.arity !== undefined) row.arity = target.arity;
 	if (record.text) row.text = record.text;

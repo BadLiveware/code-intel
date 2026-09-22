@@ -6,7 +6,7 @@ import { collectRepoFiles } from "../../file-discovery.ts";
 import { importsFor } from "../../language-support/imports.ts";
 import { ensureInsideRoot } from "../../repo.ts";
 import { runReferenceConfirmation } from "../../lsp/confirmation.ts";
-import { rowWithTarget } from "../../source-range.ts";
+import { rowWithTarget, sourceHash } from "../../source-range.ts";
 import { extractFileRecords, parseFiles, readSourceFileAsParsed, type SymbolRecord } from "../../tree-sitter.ts";
 import { candidateScore, defaultTestPaths, shouldConsiderTestCandidate, testMapTerms, testSearchPaths } from "../test-map/language-heuristics.ts";
 import { normalizePositiveInteger, normalizeStringArray, summarizeFileDistribution } from "../../util.ts";
@@ -289,7 +289,7 @@ function scanRepo(repoRoot: string, params: { paths?: string[]; maxDepth: number
 
 function declarationRows(records: SymbolRecord[], detail: ResultDetail, source?: string, repoRoot?: string): Record<string, unknown>[] {
 	return records.map((record) => {
-		const row = rowWithTarget(record, source, repoRoot, records);
+		const row = rowWithTarget(record, source, records);
 		if (detail !== "snippets") delete row.text;
 		return row;
 	});
@@ -332,7 +332,7 @@ export async function runFileOutline(params: CodeIntelFileOutlineParams, repoRoo
 		imports: params.includeImports === false ? undefined : importsFor(language, parsedFile.source),
 		declarations: declarations.slice(0, maxSymbols),
 		summary: { declarationCount: declarations.length, importCount: params.includeImports === false ? undefined : importsFor(language, parsedFile.source).length },
-		coverage: { truncated: declarations.length > maxSymbols, maxSymbols },
+		coverage: { truncated: declarations.length > maxSymbols, maxSymbols, sourceHash: sourceHash(parsedFile.source) },
 		diagnostics: [...parsed.diagnostics, ...diagnostics],
 		limitations: ["File outlines are Tree-sitter syntax evidence for navigation, not semantic proof of API boundaries or references."],
 		elapsedMs: Date.now() - started,

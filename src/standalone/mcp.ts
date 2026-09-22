@@ -40,10 +40,11 @@ export function createCodeIntelMcpServer(env: CodeIntelEnv): Server {
 		}
 		try {
 			const result = await spec.run((request.params.arguments ?? {}) as Record<string, unknown>, env, extra.signal);
-			return {
-				content: [{ type: "text" as const, text: result.contentText }],
-				structuredContent: result.details,
-			};
+			// structuredContent restates contentText as raw JSON. Clients that forward both spend
+			// multiples of the text budget on the same answer, so it ships only on explicit opt-in.
+			return env.structuredContent
+				? { content: [{ type: "text" as const, text: result.contentText }], structuredContent: result.details }
+				: { content: [{ type: "text" as const, text: result.contentText }] };
 		} catch (error) {
 			return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }], isError: true };
 		}
