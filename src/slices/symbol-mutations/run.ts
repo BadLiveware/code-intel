@@ -64,7 +64,12 @@ export async function runReplaceSymbol(params: CodeIntelReplaceSymbolParams, rep
 	const span = exactLineSpan(parsed.source, rangeFromRecord(record));
 	const oldHash = shortHash(span.text);
 	if (params.oldHash && params.oldHash !== oldHash) return failure(started, repoRoot, "oldHash mismatch", [`Expected ${params.oldHash}, found ${oldHash}`]);
-	if (params.oldText !== undefined && params.oldText !== span.text) return failure(started, repoRoot, "oldText mismatch", ["Provided oldText does not exactly match the resolved current symbol text"]);
+	if (params.oldText !== undefined && params.oldText !== span.text) {
+		const widened = params.oldText.includes(span.text)
+			? "Provided oldText contains the declaration plus surrounding lines; a contextLines read returns a wider view than replace_symbol matches. Pass oldHash, or oldText read without contextLines."
+			: "Provided oldText does not exactly match the resolved current symbol text";
+		return failure(started, repoRoot, "oldText mismatch", [widened]);
+	}
 	const newText = withNormalizedEol(params.newText, span.eol, params.normalizeEol);
 	const nextSource = `${parsed.source.slice(0, span.startIndex)}${newText}${parsed.source.slice(span.endIndex)}`;
 	fs.writeFileSync(targetFile(repoRoot, target), nextSource, "utf-8");

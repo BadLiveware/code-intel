@@ -310,7 +310,10 @@ function segmentForRecord(parsed: ParsedFile, record: SymbolRecord, target: Symb
 	const useContext = !isFunctionLike(record) && options.contextLines > 0;
 	const fullRange = useContext ? expandedRange(baseRange, options.contextLines, parsed.source) : baseRange;
 	const fullSource = exactLineSlice(parsed.source, fullRange);
-	const oldHash = shortHash(fullSource);
+	// source is a reading view that contextLines may widen past the declaration; oldHash is
+	// mutation evidence, and replace_symbol only ever hashes the declaration range. Hashing the
+	// widened view instead would make every contextLines read produce a hash that cannot match.
+	const oldHash = shortHash(useContext ? exactLineSlice(parsed.source, baseRange) : fullSource);
 	let source = fullSource;
 	let outputRange = fullRange;
 	let truncated = false;
@@ -331,7 +334,9 @@ function segmentForRecord(parsed: ParsedFile, record: SymbolRecord, target: Symb
 		omittedLineCount = Math.max(0, rangeLineCount(fullRange) - kept.length);
 	}
 	const segmentTarget = { ...target, range: outputRange };
-	return { kind: options.kind, source, oldHash, oldTextReady: !truncated, sourceIncluded: true, sourceCompleteness: truncated ? "partial" : "complete-segment", truncated, lineCount: source ? source.split(/\r?\n/).length : 0, byteCount: Buffer.byteLength(source, "utf8"), omittedLineCount, target: segmentTarget, range: outputRange, reason: options.reason, evidence: options.evidence };
+	// oldTextReady answers "can this source be handed back as oldText?". A widened read cannot:
+	// it carries lines outside the declaration that replace_symbol will not match.
+	return { kind: options.kind, source, oldHash, oldTextReady: !truncated && !useContext, sourceIncluded: true, sourceCompleteness: truncated ? "partial" : "complete-segment", truncated, lineCount: source ? source.split(/\r?\n/).length : 0, byteCount: Buffer.byteLength(source, "utf8"), omittedLineCount, target: segmentTarget, range: outputRange, reason: options.reason, evidence: options.evidence };
 }
 
 function identifiersInSource(source: string): Set<string> {

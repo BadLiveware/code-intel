@@ -524,6 +524,43 @@ test("post-edit map preserves C# project-boundary and no-symbol changed files", 
 	assert.match(result.contentText, /changed-file Properties\/AssemblyInfo\.cs source-no-symbols/);
 });
 
+test("read_symbol safety evidence still replaces after a contextLines read", async () => {
+	const repo = fixtureRepo();
+	const file = path.join(repo, "limits.ts");
+	fs.writeFileSync(file, "// a leading comment\nexport const LIMIT = 42;\n\nexport function useLimit(): number {\n  return LIMIT;\n}\n");
+	const env = createCodeIntelEnv({ cwd: repo, mutationPolicy: "enabled" });
+
+	const widened = await runCodeIntelTool("code_intel_read_symbol", { path: "limits.ts", symbol: "LIMIT", contextLines: 1 }, env);
+	const widenedSegment = (widened.details as any).targetSegment;
+	// contextLines widens the reading view past the declaration...
+	assert.match(widenedSegment.source, /^\/\/ a leading comment\n/);
+	// ...so that source is not usable as oldText, and the segment says so.
+	assert.equal(widenedSegment.oldTextReady, false);
+
+	// ...but oldHash is mutation evidence for the declaration and must still match.
+	const plain = await runCodeIntelTool("code_intel_read_symbol", { path: "limits.ts", symbol: "LIMIT" }, env);
+	assert.equal(widenedSegment.oldHash, (plain.details as any).targetSegment.oldHash);
+
+	const replaced = await runCodeIntelTool("code_intel_replace_symbol", { path: "limits.ts", symbol: "LIMIT", oldHash: widenedSegment.oldHash, newText: "export const LIMIT = 43;" }, env);
+	assert.equal((replaced.details as any).ok, true, JSON.stringify((replaced.details as any).diagnostics));
+	assert.match(fs.readFileSync(file, "utf-8"), /export const LIMIT = 43;/);
+	// The leading comment the widened read showed is untouched by the declaration replace.
+	assert.match(fs.readFileSync(file, "utf-8"), /^\/\/ a leading comment\n/);
+});
+
+test("replace_symbol explains a widened oldText instead of a bare mismatch", async () => {
+	const repo = fixtureRepo();
+	fs.writeFileSync(path.join(repo, "limits.ts"), "// a leading comment\nexport const LIMIT = 42;\n");
+	const env = createCodeIntelEnv({ cwd: repo, mutationPolicy: "enabled" });
+
+	const widened = await runCodeIntelTool("code_intel_read_symbol", { path: "limits.ts", symbol: "LIMIT", contextLines: 1 }, env);
+	const result = await runCodeIntelTool("code_intel_replace_symbol", { path: "limits.ts", symbol: "LIMIT", oldText: (widened.details as any).targetSegment.source, newText: "export const LIMIT = 43;" }, env);
+
+	assert.equal((result.details as any).ok, false);
+	assert.match((result.details as any).diagnostics[0], /contextLines read returns a wider view/);
+	assert.match(fs.readFileSync(path.join(repo, "limits.ts"), "utf-8"), /export const LIMIT = 42;/);
+});
+
 test("standalone registry gates mutation tools unless enabled", async () => {
 	const repo = fixtureRepo();
 	const env = createCodeIntelEnv({ cwd: repo });
