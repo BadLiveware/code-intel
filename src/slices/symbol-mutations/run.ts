@@ -54,6 +54,18 @@ function insertionText(source: string, boundary: number, rawText: string, eol: "
 	return text;
 }
 
+// A widened read returns the declaration's lines intact inside a larger block, so compare whole
+// lines. A raw substring test gets this wrong twice over: it fires when a stale oldText merely
+// contains an edited declaration mid-line, reporting a wider view when the declaration itself
+// changed, and it misses truncated reads, which re-join their kept lines with "\n" and so drop the
+// CRLF a multi-line declaration carries.
+function containsDeclarationLines(oldText: string, declaration: string): boolean {
+	const haystack = oldText.split(/\r?\n/);
+	const needle = declaration.split(/\r?\n/);
+	if (needle.length >= haystack.length) return false;
+	return haystack.some((_, index) => index + needle.length <= haystack.length && needle.every((line, offset) => haystack[index + offset] === line));
+}
+
 export async function runReplaceSymbol(params: CodeIntelReplaceSymbolParams, repoRoot: string, config: CodeIntelConfig, signal?: AbortSignal): Promise<Record<string, unknown>> {
 	const started = Date.now();
 	if (typeof params.newText !== "string") return failure(started, repoRoot, "newText is required");
@@ -65,7 +77,7 @@ export async function runReplaceSymbol(params: CodeIntelReplaceSymbolParams, rep
 	const oldHash = shortHash(span.text);
 	if (params.oldHash && params.oldHash !== oldHash) return failure(started, repoRoot, "oldHash mismatch", [`Expected ${params.oldHash}, found ${oldHash}`]);
 	if (params.oldText !== undefined && params.oldText !== span.text) {
-		const widened = params.oldText.includes(span.text)
+		const widened = containsDeclarationLines(params.oldText, span.text)
 			? "Provided oldText contains the declaration plus surrounding lines; a contextLines read returns a wider view than replace_symbol matches. Pass oldHash, or oldText read without contextLines."
 			: "Provided oldText does not exactly match the resolved current symbol text";
 		return failure(started, repoRoot, "oldText mismatch", [widened]);

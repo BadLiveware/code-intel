@@ -313,7 +313,8 @@ function segmentForRecord(parsed: ParsedFile, record: SymbolRecord, target: Symb
 	// source is a reading view that contextLines may widen past the declaration; oldHash is
 	// mutation evidence, and replace_symbol only ever hashes the declaration range. Hashing the
 	// widened view instead would make every contextLines read produce a hash that cannot match.
-	const oldHash = shortHash(useContext ? exactLineSlice(parsed.source, baseRange) : fullSource);
+	const declarationSource = useContext ? exactLineSlice(parsed.source, baseRange) : fullSource;
+	const oldHash = shortHash(declarationSource);
 	let source = fullSource;
 	let outputRange = fullRange;
 	let truncated = false;
@@ -334,9 +335,10 @@ function segmentForRecord(parsed: ParsedFile, record: SymbolRecord, target: Symb
 		omittedLineCount = Math.max(0, rangeLineCount(fullRange) - kept.length);
 	}
 	const segmentTarget = { ...target, range: outputRange };
-	// oldTextReady answers "can this source be handed back as oldText?". A widened read cannot:
-	// it carries lines outside the declaration that replace_symbol will not match.
-	return { kind: options.kind, source, oldHash, oldTextReady: !truncated && !useContext, sourceIncluded: true, sourceCompleteness: truncated ? "partial" : "complete-segment", truncated, lineCount: source ? source.split(/\r?\n/).length : 0, byteCount: Buffer.byteLength(source, "utf8"), omittedLineCount, target: segmentTarget, range: outputRange, reason: options.reason, evidence: options.evidence };
+	// oldTextReady answers "can this source be handed back as oldText?". Asking for contextLines is
+	// not the same as getting any: expandedRange clamps at the file edges, so a declaration that
+	// fills the file comes back unwidened and stays usable. Compare what was produced.
+	return { kind: options.kind, source, oldHash, oldTextReady: !truncated && source === declarationSource, sourceIncluded: true, sourceCompleteness: truncated ? "partial" : "complete-segment", truncated, lineCount: source ? source.split(/\r?\n/).length : 0, byteCount: Buffer.byteLength(source, "utf8"), omittedLineCount, target: segmentTarget, range: outputRange, reason: options.reason, evidence: options.evidence };
 }
 
 function identifiersInSource(source: string): Set<string> {
