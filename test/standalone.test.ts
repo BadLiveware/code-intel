@@ -524,6 +524,95 @@ test("post-edit map preserves C# project-boundary and no-symbol changed files", 
 	assert.match(result.contentText, /changed-file Properties\/AssemblyInfo\.cs source-no-symbols/);
 });
 
+test("read_symbol safety evidence still replaces after a contextLines read", async () => {
+	const repo = fixtureRepo();
+	const file = path.join(repo, "limits.ts");
+	fs.writeFileSync(file, "// a leading comment\nexport const LIMIT = 42;\n\nexport function useLimit(): number {\n  return LIMIT;\n}\n");
+	const env = createCodeIntelEnv({ cwd: repo, mutationPolicy: "enabled" });
+
+	const widened = await runCodeIntelTool("code_intel_read_symbol", { path: "limits.ts", symbol: "LIMIT", contextLines: 1 }, env);
+	const widenedSegment = (widened.details as any).targetSegment;
+	// contextLines widens the reading view past the declaration...
+	assert.match(widenedSegment.source, /^\/\/ a leading comment\n/);
+	// ...so that source is not usable as oldText, and the segment says so.
+	assert.equal(widenedSegment.oldTextReady, false);
+
+	// ...but oldHash is mutation evidence for the declaration and must still match.
+	const plain = await runCodeIntelTool("code_intel_read_symbol", { path: "limits.ts", symbol: "LIMIT" }, env);
+	assert.equal(widenedSegment.oldHash, (plain.details as any).targetSegment.oldHash);
+
+	const replaced = await runCodeIntelTool("code_intel_replace_symbol", { path: "limits.ts", symbol: "LIMIT", oldHash: widenedSegment.oldHash, newText: "export const LIMIT = 43;" }, env);
+	assert.equal((replaced.details as any).ok, true, JSON.stringify((replaced.details as any).diagnostics));
+	assert.match(fs.readFileSync(file, "utf-8"), /export const LIMIT = 43;/);
+	// The leading comment the widened read showed is untouched by the declaration replace.
+	assert.match(fs.readFileSync(file, "utf-8"), /^\/\/ a leading comment\n/);
+});
+
+test("replace_symbol explains a widened oldText instead of a bare mismatch", async () => {
+	const repo = fixtureRepo();
+	fs.writeFileSync(path.join(repo, "limits.ts"), "// a leading comment\nexport const LIMIT = 42;\n");
+	const env = createCodeIntelEnv({ cwd: repo, mutationPolicy: "enabled" });
+
+	const widened = await runCodeIntelTool("code_intel_read_symbol", { path: "limits.ts", symbol: "LIMIT", contextLines: 1 }, env);
+	const result = await runCodeIntelTool("code_intel_replace_symbol", { path: "limits.ts", symbol: "LIMIT", oldText: (widened.details as any).targetSegment.source, newText: "export const LIMIT = 43;" }, env);
+
+	assert.equal((result.details as any).ok, false);
+	assert.match((result.details as any).diagnostics[0], /plus extra lines/);
+	assert.match(fs.readFileSync(path.join(repo, "limits.ts"), "utf-8"), /export const LIMIT = 42;/);
+});
+
+test("oldTextReady follows what the read produced, not what it asked for", async () => {
+	const repo = fixtureRepo();
+	const env = createCodeIntelEnv({ cwd: repo, mutationPolicy: "enabled" });
+
+	// expandedRange clamps at the file edges, so a declaration filling the file is never widened.
+	fs.writeFileSync(path.join(repo, "one.ts"), "export const LIMIT = 42;");
+	const clamped = await runCodeIntelTool("code_intel_read_symbol", { path: "one.ts", symbol: "LIMIT", contextLines: 1 }, env);
+	const clampedSegment = (clamped.details as any).targetSegment;
+	const plain = await runCodeIntelTool("code_intel_read_symbol", { path: "one.ts", symbol: "LIMIT" }, env);
+	assert.equal(clampedSegment.source, (plain.details as any).targetSegment.source);
+	assert.equal(clampedSegment.oldTextReady, true);
+
+	// ...and that source really is reusable as oldText.
+	const replaced = await runCodeIntelTool("code_intel_replace_symbol", { path: "one.ts", symbol: "LIMIT", oldText: clampedSegment.source, newText: "export const LIMIT = 43;" }, env);
+	assert.equal((replaced.details as any).ok, true);
+
+	// A read that did widen stays unusable.
+	fs.writeFileSync(path.join(repo, "two.ts"), "// lead\nexport const LIMIT = 42;\n");
+	const widened = await runCodeIntelTool("code_intel_read_symbol", { path: "two.ts", symbol: "LIMIT", contextLines: 1 }, env);
+	assert.equal((widened.details as any).targetSegment.oldTextReady, false);
+});
+
+test("the widened-oldText hint reads lines, not raw substrings", async () => {
+	const repo = fixtureRepo();
+	const env = createCodeIntelEnv({ cwd: repo, mutationPolicy: "enabled" });
+	const hintOf = (result: any) => (result.details.diagnostics ?? [""])[0];
+
+	// A stale oldText that merely contains the edited declaration mid-line is staleness, not
+	// widening: the declaration lost its "export " since the read.
+	fs.writeFileSync(path.join(repo, "edited.ts"), "// a comment\nconst LIMIT = 42;\n");
+	const stale = await runCodeIntelTool("code_intel_replace_symbol", { path: "edited.ts", symbol: "LIMIT", oldText: "export const LIMIT = 42;", newText: "const LIMIT = 43;" }, env);
+	assert.equal((stale.details as any).ok, false);
+	assert.doesNotMatch(hintOf(stale), /plus extra lines/);
+
+	// Context below the declaration must not hide it: the declaration's trailing newline leaves an
+	// empty line that only ever aligns at the very end of a block.
+	fs.writeFileSync(path.join(repo, "below.ts"), "// lead\nexport const LIMIT = 42;\n// trailing\n");
+	const below = (await runCodeIntelTool("code_intel_read_symbol", { path: "below.ts", symbol: "LIMIT", contextLines: 1 }, env)).details as any;
+	const belowResult = await runCodeIntelTool("code_intel_replace_symbol", { path: "below.ts", symbol: "LIMIT", oldText: below.targetSegment.source, newText: "export const LIMIT = 43;" }, env);
+	assert.equal((belowResult.details as any).ok, false);
+	assert.match(hintOf(belowResult), /plus extra lines/);
+
+	// A truncated widened read of a multi-line CRLF declaration re-joins with "\n", so a raw
+	// substring test would miss a view that genuinely is wider.
+	fs.writeFileSync(path.join(repo, "crlf.ts"), `// lead\r\nexport const TABLE = {\r\n  a: 1,\r\n  b: 2,\r\n};\r\n// ${"z".repeat(1400)}\r\n`);
+	const segment = (await runCodeIntelTool("code_intel_read_symbol", { path: "crlf.ts", symbol: "TABLE", contextLines: 1, maxBytes: 1000 }, env)).details as any;
+	assert.equal(segment.targetSegment.truncated, true);
+	const crlf = await runCodeIntelTool("code_intel_replace_symbol", { path: "crlf.ts", symbol: "TABLE", oldText: segment.targetSegment.source, newText: "export const TABLE = {};" }, env);
+	assert.equal((crlf.details as any).ok, false);
+	assert.match(hintOf(crlf), /plus extra lines/);
+});
+
 test("standalone registry gates mutation tools unless enabled", async () => {
 	const repo = fixtureRepo();
 	const env = createCodeIntelEnv({ cwd: repo });

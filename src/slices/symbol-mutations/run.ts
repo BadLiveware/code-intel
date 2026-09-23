@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { CodeIntelConfig, CodeIntelInsertRelativeParams, CodeIntelReadSymbolParams, CodeIntelReplaceSymbolParams } from "../../types.ts";
 import { ensureInsideRoot } from "../../repo.ts";
-import { exactLineSpan, normalizeInsertedText, rangeFromRecord, readHintForTarget, shortHash, sourceHash, type SymbolTarget } from "../../source-range.ts";
+import { exactLineSpan, normalizeInsertedText, rangeFromRecord, shortHash, sourceHash, type SymbolTarget } from "../../source-range.ts";
 import { resolveSymbolSelection } from "../targeted-symbols/run.ts";
 
 function readParams(params: CodeIntelReplaceSymbolParams | CodeIntelInsertRelativeParams): CodeIntelReadSymbolParams {
@@ -54,6 +54,25 @@ function insertionText(source: string, boundary: number, rawText: string, eol: "
 	return text;
 }
 
+// A widened read returns the declaration's lines intact inside a larger block, so compare whole
+// lines. A raw substring test gets this wrong twice over: it fires when a stale oldText merely
+// contains an edited declaration mid-line, reporting a wider view when the declaration itself
+// changed, and it misses truncated reads, which re-join their kept lines with "\n" and so drop the
+// CRLF a multi-line declaration carries.
+function contentLines(text: string): string[] {
+	const lines = text.split(/\r?\n/);
+	// A trailing newline leaves an empty entry that can only align at the end of the haystack, which
+	// would hide any declaration followed by context lines.
+	return lines.length > 0 && lines[lines.length - 1] === "" ? lines.slice(0, -1) : lines;
+}
+
+function containsDeclarationLines(oldText: string, declaration: string): boolean {
+	const haystack = contentLines(oldText);
+	const needle = contentLines(declaration);
+	if (needle.length === 0 || needle.length >= haystack.length) return false;
+	return haystack.some((_, index) => index + needle.length <= haystack.length && needle.every((line, offset) => haystack[index + offset] === line));
+}
+
 export async function runReplaceSymbol(params: CodeIntelReplaceSymbolParams, repoRoot: string, config: CodeIntelConfig, signal?: AbortSignal): Promise<Record<string, unknown>> {
 	const started = Date.now();
 	if (typeof params.newText !== "string") return failure(started, repoRoot, "newText is required");
@@ -64,7 +83,12 @@ export async function runReplaceSymbol(params: CodeIntelReplaceSymbolParams, rep
 	const span = exactLineSpan(parsed.source, rangeFromRecord(record));
 	const oldHash = shortHash(span.text);
 	if (params.oldHash && params.oldHash !== oldHash) return failure(started, repoRoot, "oldHash mismatch", [`Expected ${params.oldHash}, found ${oldHash}`]);
-	if (params.oldText !== undefined && params.oldText !== span.text) return failure(started, repoRoot, "oldText mismatch", ["Provided oldText does not exactly match the resolved current symbol text"]);
+	if (params.oldText !== undefined && params.oldText !== span.text) {
+		const widened = containsDeclarationLines(params.oldText, span.text)
+			? "Provided oldText holds the declaration plus extra lines. A contextLines read returns that wider view, and so does a declaration that lost lines after you read it. Pass oldHash, or re-read without contextLines and compare."
+			: "Provided oldText does not exactly match the resolved current symbol text";
+		return failure(started, repoRoot, "oldText mismatch", [widened]);
+	}
 	const newText = withNormalizedEol(params.newText, span.eol, params.normalizeEol);
 	const nextSource = `${parsed.source.slice(0, span.startIndex)}${newText}${parsed.source.slice(span.endIndex)}`;
 	fs.writeFileSync(targetFile(repoRoot, target), nextSource, "utf-8");
@@ -79,7 +103,6 @@ export async function runReplaceSymbol(params: CodeIntelReplaceSymbolParams, rep
 		nextReadRecommended: true,
 		nextReadReason: "symbol-mutated-read-if-source-needed",
 		target,
-		readHint: readHintForTarget(target, "replaced symbol range before mutation"),
 		oldHash,
 		newSourceHash: sourceHash(nextSource),
 		summary: { byteDelta: Buffer.byteLength(newText, "utf8") - Buffer.byteLength(span.text, "utf8"), oldByteCount: Buffer.byteLength(span.text, "utf8"), newByteCount: Buffer.byteLength(newText, "utf8") },
@@ -113,7 +136,6 @@ export async function runInsertRelative(params: CodeIntelInsertRelativeParams, r
 		nextReadRecommended: true,
 		nextReadReason: "relative-insert-read-if-source-needed",
 		anchor: target,
-		readHint: readHintForTarget(target, "insert anchor range before mutation"),
 		anchorHash,
 		newSourceHash: sourceHash(nextSource),
 		summary: { byteDelta: Buffer.byteLength(text, "utf8"), insertedByteCount: Buffer.byteLength(text, "utf8"), position: params.position },

@@ -59,7 +59,7 @@ export const postEditMapToolSpec: CodeIntelToolSpec<CodeIntelPostEditMapParams> 
 	promptSnippet: "Use after editing or writing files to decide what to inspect or validate next without re-reading complete segments unnecessarily.",
 	promptGuidelines: [
 		"Use code_intel_post_edit_map after edit/write when changed-symbol, caller, test, or diagnostic follow-up context would improve confidence.",
-		"Use returned readHints or code_intel_read_symbol when source is needed for follow-up inspection.",
+		"Use returned line ranges or code_intel_read_symbol when source is needed for follow-up inspection.",
 		"Use includeDiagnostics:true when current touched-file diagnostics would help decide the next fix or validation step.",
 		"Use diagnostic-focused targets to prioritize source reads and fixes; pair the result with project-native validation when needed.",
 		"Treat diagnostic provenance/freshness as trust context: supplied diagnostics default to unknown freshness, collected diagnostics are not baseline-compared proof.",

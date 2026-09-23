@@ -12,10 +12,11 @@ interface CliOptions {
 	format: "compact" | "json";
 	mutationPolicy: CodeIntelMutationPolicy;
 	pathBase: CodeIntelPathBase;
+	structuredContent: boolean;
 }
 
 function usage(): string {
-	return `code-intel standalone code intelligence\n\nUsage:\n  code-intel call <tool> --json '<params>' [--format compact|json] [--cwd <dir>] [--config <file>] [--path-base auto|cwd|repo] [--enable-mutations]\n  code-intel mcp [--cwd <dir>] [--config <file>] [--path-base auto|cwd|repo] [--enable-mutations]\n  code-intel list [--enable-mutations]\n\nExamples:\n  code-intel call code_intel_impact_map --json '{"changedFiles":["src/index.ts"]}'\n  code-intel mcp --cwd /path/to/repo\n`;
+	return `code-intel standalone code intelligence\n\nUsage:\n  code-intel call <tool> --json '<params>' [--format compact|json] [--cwd <dir>] [--config <file>] [--path-base auto|cwd|repo] [--enable-mutations]\n  code-intel mcp [--cwd <dir>] [--config <file>] [--path-base auto|cwd|repo] [--enable-mutations] [--structured-content]\n  code-intel list [--enable-mutations]\n\nExamples:\n  code-intel call code_intel_impact_map --json '{"changedFiles":["src/index.ts"]}'\n  code-intel mcp --cwd /path/to/repo\n`;
 }
 
 function readJsonArgument(value: string | undefined): Record<string, unknown> {
@@ -28,7 +29,7 @@ function readJsonArgument(value: string | undefined): Record<string, unknown> {
 
 function parseGlobalOptions(args: string[]): { rest: string[]; options: CliOptions; jsonInput?: string } {
 	const rest: string[] = [];
-	const options: CliOptions = { format: "compact", mutationPolicy: "disabled", pathBase: "auto" };
+	const options: CliOptions = { format: "compact", mutationPolicy: "disabled", pathBase: "auto", structuredContent: false };
 	let jsonInput: string | undefined;
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
@@ -44,6 +45,7 @@ function parseGlobalOptions(args: string[]): { rest: string[]; options: CliOptio
 			if (value !== "auto" && value !== "cwd" && value !== "repo") throw new Error("--path-base must be auto, cwd, or repo");
 			options.pathBase = value;
 		} else if (arg === "--enable-mutations") options.mutationPolicy = "enabled";
+		else if (arg === "--structured-content") options.structuredContent = true;
 		else if (arg === "--help" || arg === "-h") rest.push("help");
 		else rest.push(arg);
 	}
@@ -88,7 +90,7 @@ async function run(argv: string[]): Promise<void> {
 		return;
 	}
 	if (command === "mcp") {
-		const env = createCodeIntelEnv({ cwd: options.cwd, configPath: options.configPath, mutationPolicy: options.mutationPolicy, pathBase: options.pathBase, persistentLsp: true });
+		const env = createCodeIntelEnv({ cwd: options.cwd, configPath: options.configPath, mutationPolicy: options.mutationPolicy, pathBase: options.pathBase, persistentLsp: true, structuredContent: options.structuredContent });
 		await runCodeIntelMcpServer(env);
 		return;
 	}

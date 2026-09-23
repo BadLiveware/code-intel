@@ -38,13 +38,6 @@ export function shortRef(target: Record<string, unknown>): string | undefined {
 	return ref.includes("@") ? ref.split("@").pop() : ref;
 }
 
-export function readHintText(row: Record<string, unknown>): string | undefined {
-	const hint = asRecord(row.readHint);
-	const offset = num(hint.offset);
-	const limit = num(hint.limit);
-	return offset && limit ? `${offset}+${limit}` : undefined;
-}
-
 export function compactKind(kind: unknown, owner?: unknown): string {
 	const text = String(kind ?? "item");
 	if (owner) {
@@ -71,9 +64,7 @@ export function declarationLine(row: Record<string, unknown>): string {
 	const targetRange = asRecord(target.range);
 	const range = compactRange(targetRange) ?? loc(row).replace(/^:/, "");
 	const ref = shortRef(target);
-	const read = readHintText(row);
-	const meta = [ref ? `ref=${ref}` : undefined, read ? `read=${read}` : undefined].filter(Boolean).join(" ");
-	return `  ${compactKind(row.kind, owner)} ${qname}${range ? `:${range}` : ""}${meta ? ` ${meta}` : ""}`;
+	return `  ${compactKind(row.kind, owner)} ${qname}${range ? `:${range}` : ""}${ref ? ` ref=${ref}` : ""}`;
 }
 
 export function header(tool: string, payload: Record<string, unknown>): string {

@@ -5,7 +5,7 @@ import { LANGUAGE_CAPABILITIES, languageCapability, languageSpec } from "../../l
 import { changedFilesFromBase, ensureInsideRoot } from "../../repo.ts";
 import { runImpactMap } from "../impact-map/run.ts";
 import { runTestMap } from "../orientation/run.ts";
-import { buildSymbolTarget, exactLineSlice, expandedRange, locatorMetadata, rangeFromRecord, readHintForTarget, rangeLineCount, shortHash, sliceLines, sourceHash, targetFromUnknown, type SourceRange, type SourceSegment, type SymbolRelocationHints, type SymbolTarget } from "../../source-range.ts";
+import { buildSymbolTarget, exactLineSlice, expandedRange, locatorMetadata, rangeFromRecord, rangeLineCount, shortHash, sliceLines, sourceHash, targetFromUnknown, type SourceRange, type SourceSegment, type SymbolRelocationHints, type SymbolTarget } from "../../source-range.ts";
 import { extractFileRecords, parseFiles, readSourceFileAsParsed, type ParsedFile, type SymbolRecord } from "../../tree-sitter.ts";
 import { isRecord, normalizePositiveInteger, normalizeStringArray, summarizeFileDistribution } from "../../util.ts";
 import { collectTouchedDiagnostics, mergeDiagnostics, normalizePostEditDiagnostics } from "../post-edit-map/diagnostics.ts";
@@ -242,7 +242,7 @@ function selectRecord(params: CodeIntelReadSymbolParams, parsed: ParsedFile, rec
 	const targetFor = (record: SymbolRecord) => {
 		let target = targets.get(record);
 		if (!target) {
-			target = buildSymbolTarget(record, parsed.source, repoRoot, records);
+			target = buildSymbolTarget(record, parsed.source, records);
 			targets.set(record, target);
 		}
 		return target;
@@ -310,7 +310,11 @@ function segmentForRecord(parsed: ParsedFile, record: SymbolRecord, target: Symb
 	const useContext = !isFunctionLike(record) && options.contextLines > 0;
 	const fullRange = useContext ? expandedRange(baseRange, options.contextLines, parsed.source) : baseRange;
 	const fullSource = exactLineSlice(parsed.source, fullRange);
-	const oldHash = shortHash(fullSource);
+	// source is a reading view that contextLines may widen past the declaration; oldHash is
+	// mutation evidence, and replace_symbol only ever hashes the declaration range. Hashing the
+	// widened view instead would make every contextLines read produce a hash that cannot match.
+	const declarationSource = useContext ? exactLineSlice(parsed.source, baseRange) : fullSource;
+	const oldHash = shortHash(declarationSource);
 	let source = fullSource;
 	let outputRange = fullRange;
 	let truncated = false;
@@ -331,7 +335,10 @@ function segmentForRecord(parsed: ParsedFile, record: SymbolRecord, target: Symb
 		omittedLineCount = Math.max(0, rangeLineCount(fullRange) - kept.length);
 	}
 	const segmentTarget = { ...target, range: outputRange };
-	return { kind: options.kind, source, oldHash, oldTextReady: !truncated, sourceIncluded: true, sourceCompleteness: truncated ? "partial" : "complete-segment", truncated, lineCount: source ? source.split(/\r?\n/).length : 0, byteCount: Buffer.byteLength(source, "utf8"), omittedLineCount, target: segmentTarget, range: outputRange, readHint: readHintForTarget({ ...target, range: fullRange }, truncated ? "complete target range" : "returned source segment"), reason: options.reason, evidence: options.evidence };
+	// oldTextReady answers "can this source be handed back as oldText?". Asking for contextLines is
+	// not the same as getting any: expandedRange clamps at the file edges, so a declaration that
+	// fills the file comes back unwidened and stays usable. Compare what was produced.
+	return { kind: options.kind, source, oldHash, oldTextReady: !truncated && source === declarationSource, sourceIncluded: true, sourceCompleteness: truncated ? "partial" : "complete-segment", truncated, lineCount: source ? source.split(/\r?\n/).length : 0, byteCount: Buffer.byteLength(source, "utf8"), omittedLineCount, target: segmentTarget, range: outputRange, reason: options.reason, evidence: options.evidence };
 }
 
 function identifiersInSource(source: string): Set<string> {
@@ -365,7 +372,7 @@ function contextSegments(parsed: ParsedFile, records: SymbolRecord[], targetReco
 	let omittedContextCount = 0;
 	for (const record of records) {
 		if (!identifiers.has(record.name)) continue;
-		const candidateTarget = buildSymbolTarget(record, parsed.source, repoRoot, records);
+		const candidateTarget = buildSymbolTarget(record, parsed.source, records);
 		if (seen.has(targetKey(candidateTarget))) continue;
 		const insideTarget = record.line >= targetRecord.line && record.endLine <= targetRecord.endLine;
 		if (insideTarget) continue;
@@ -390,7 +397,7 @@ export async function runReadSymbol(params: CodeIntelReadSymbolParams, repoRoot:
 	if (!selected.parsed) return { ok: false, repoRoot, diagnostics: selected.diagnostics, reason: selected.diagnostics[0] ?? "Unable to parse target file", elapsedMs: Date.now() - started };
 	const { parsed, records, diagnostics } = selected;
 	if (!selected.record || !selected.target) {
-		return { ok: false, repoRoot, file: parsed.file, language: parsed.language, sourceIncluded: false, sourceCompleteness: "locations-only", nextReadRecommended: false, nextReadReason: "ambiguous-or-missing-target", alternatives: (selected.alternatives ?? []).slice(0, 20).map((target) => ({ target, readHint: readHintForTarget(target, "candidate declaration range") })), summary: { alternativeCount: selected.alternatives?.length ?? 0 }, diagnostics, limitations: ["Symbol reads use current-source Tree-sitter syntax ranges; use language tooling for semantic definition proof when required."], elapsedMs: Date.now() - started };
+		return { ok: false, repoRoot, file: parsed.file, language: parsed.language, sourceIncluded: false, sourceCompleteness: "locations-only", nextReadRecommended: false, nextReadReason: "ambiguous-or-missing-target", alternatives: (selected.alternatives ?? []).slice(0, 20).map((target) => ({ target })), summary: { alternativeCount: selected.alternatives?.length ?? 0 }, diagnostics, limitations: ["Symbol reads use current-source Tree-sitter syntax ranges; use language tooling for semantic definition proof when required."], elapsedMs: Date.now() - started };
 	}
 	const maxBytes = normalizePositiveInteger(params.maxBytes, 30_000, 1_000, config.maxOutputBytes);
 	const contextLines = normalizePositiveInteger(params.contextLines, 0, 0, 50);
@@ -408,10 +415,9 @@ export async function runReadSymbol(params: CodeIntelReadSymbolParams, repoRoot:
 		nextReadRecommended: anyPartial,
 		nextReadReason: anyPartial ? "one-or-more-segments-truncated" : "complete-target-segment-included",
 		target: selected.target,
-		targetSegment,
+		targetSegment: { ...targetSegment, target: undefined },
 		contextSegments: context.segments,
 		deferredReferences: context.deferredReferences,
-		readHint: targetSegment.readHint,
 		summary: { segmentCount: segments.length, contextSegmentCount: context.segments.length, deferredReferenceCount: context.deferredReferences.length, omittedContextCount: context.omittedContextCount, totalLineCount: segments.reduce((sum, segment) => sum + segment.lineCount, 0), totalByteCount: segments.reduce((sum, segment) => sum + segment.byteCount, 0) },
 		coverage: { truncated: anyPartial, maxBytes, sourceHash: sourceHash(parsed.source) },
 		diagnostics,
@@ -430,8 +436,8 @@ async function symbolsForFile(repoRoot: string, file: string, config: CodeIntelC
 	try {
 		const records = extractFileRecords(parsedFile, "locations").definitions;
 		return { file, language, records, rows: records.map((record) => {
-			const target = buildSymbolTarget(record, parsedFile.source, repoRoot, records);
-			return { target, readHint: readHintForTarget(target, "changed declaration range"), sourceIncluded: false, sourceCompleteness: "locations-only", nextReadRecommended: true, nextReadReason: "source-not-included" };
+			const target = buildSymbolTarget(record, parsedFile.source, records);
+			return { target };
 		}), diagnostics: parsed.diagnostics, parsed: parsedFile };
 	} catch (error) {
 		return { file, language, rows: [], records: [], diagnostics: [`${file}: Tree-sitter record extraction failed: ${error instanceof Error ? error.message : String(error)}`], parsed: parsedFile };
@@ -444,8 +450,8 @@ function enclosingTargetForDiagnostic(diag: Record<string, unknown>, parsed: Par
 	const column = numberValue(diag.column);
 	const record = records.filter((candidate) => recordContainsLocation(candidate, line, column)).sort((left, right) => rangeSize(left) - rangeSize(right))[0];
 	if (!record) return undefined;
-	const target = buildSymbolTarget(record, parsed.source, repoRoot, records);
-	return { diagnostic: diag, target, readHint: readHintForTarget(target, "diagnostic enclosing declaration"), sourceIncluded: false, sourceCompleteness: "locations-only", nextReadRecommended: true, nextReadReason: "diagnostic-location" };
+	const target = buildSymbolTarget(record, parsed.source, records);
+	return { diagnostic: diag, target, nextReadReason: "diagnostic-location" };
 }
 
 type PostEditMapRunOptions = {

@@ -128,7 +128,9 @@ Expected evidence:
 
 - `tools/list` includes the read-only code-intel tools.
 - The run includes calls to `code_intel_file_outline`, `code_intel_impact_map`, and `code_intel_read_symbol`.
-- Tool results include `ok:true`, bounded location/source payloads, `readHint` or `nextRead*` fields, and limitations that remind the agent to inspect current source before claims.
+- Tool results are compact text that carries bounded location/source payloads, `nextRead*` guidance, and limitations that remind the agent to inspect current source before claims.
+- Results carry no `structuredContent` unless the server is started with `--structured-content`.
+  The text block is the answer; shipping both makes the client spend several times the text budget restating it as JSON.
 
 ## Installed package shape
 

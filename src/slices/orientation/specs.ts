@@ -52,7 +52,7 @@ export const fileOutlineToolSpec: CodeIntelToolSpec<CodeIntelFileOutlineParams> 
 	promptSnippet: "Use to inspect what is inside a file before reading the full source.",
 	promptGuidelines: [
 		"Use code_intel_file_outline after repo overview points at a candidate file and before reading a very large source file.",
-		"Use imports/includes, declaration names/kinds, line ranges, symbolTargets, and readHints to pick precise reads or symbol operations.",
+		"Use imports/includes, declaration names/kinds, line ranges, and symbolTargets to pick precise reads or symbol operations.",
 		"Use this as the fast orientation step before source reads, targeted symbol reads, or anchor-relative edits.",
 	],
 	inputSchema: objectSchema({

@@ -16,6 +16,7 @@ export interface CodeIntelEnv {
 	mutationPolicy: CodeIntelMutationPolicy;
 	pathBase: CodeIntelPathBase;
 	persistentLsp: boolean;
+	structuredContent: boolean;
 }
 
 export interface CodeIntelEnvOptions {
@@ -25,6 +26,7 @@ export interface CodeIntelEnvOptions {
 	mutationPolicy?: CodeIntelMutationPolicy;
 	pathBase?: CodeIntelPathBase;
 	persistentLsp?: boolean;
+	structuredContent?: boolean;
 }
 
 function standaloneUserConfigPath(): string {
@@ -73,7 +75,7 @@ function loadConfigFile(configPath: string, config: CodeIntelConfig, loaded: str
 	}
 }
 
-export function loadStandaloneConfig(cwd: string, configPath?: string, overlay?: Partial<CodeIntelConfig>): Omit<CodeIntelEnv, "cwd" | "mutationPolicy" | "pathBase" | "persistentLsp"> {
+export function loadStandaloneConfig(cwd: string, configPath?: string, overlay?: Partial<CodeIntelConfig>): Omit<CodeIntelEnv, "cwd" | "mutationPolicy" | "pathBase" | "persistentLsp" | "structuredContent"> {
 	let config: CodeIntelConfig = { ...DEFAULT_CONFIG };
 	const explicit = explicitConfigPath(configPath ?? process.env.CODE_INTEL_CONFIG, cwd);
 	const paths = {
@@ -101,5 +103,6 @@ export function createCodeIntelEnv(options: CodeIntelEnvOptions = {}): CodeIntel
 		mutationPolicy: options.mutationPolicy ?? "disabled",
 		pathBase: options.pathBase ?? "auto",
 		persistentLsp: options.persistentLsp === true,
+		structuredContent: options.structuredContent === true,
 	};
 }
