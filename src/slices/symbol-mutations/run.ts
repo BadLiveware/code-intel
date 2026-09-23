@@ -59,10 +59,17 @@ function insertionText(source: string, boundary: number, rawText: string, eol: "
 // contains an edited declaration mid-line, reporting a wider view when the declaration itself
 // changed, and it misses truncated reads, which re-join their kept lines with "\n" and so drop the
 // CRLF a multi-line declaration carries.
+function contentLines(text: string): string[] {
+	const lines = text.split(/\r?\n/);
+	// A trailing newline leaves an empty entry that can only align at the end of the haystack, which
+	// would hide any declaration followed by context lines.
+	return lines.length > 0 && lines[lines.length - 1] === "" ? lines.slice(0, -1) : lines;
+}
+
 function containsDeclarationLines(oldText: string, declaration: string): boolean {
-	const haystack = oldText.split(/\r?\n/);
-	const needle = declaration.split(/\r?\n/);
-	if (needle.length >= haystack.length) return false;
+	const haystack = contentLines(oldText);
+	const needle = contentLines(declaration);
+	if (needle.length === 0 || needle.length >= haystack.length) return false;
 	return haystack.some((_, index) => index + needle.length <= haystack.length && needle.every((line, offset) => haystack[index + offset] === line));
 }
 
@@ -78,7 +85,7 @@ export async function runReplaceSymbol(params: CodeIntelReplaceSymbolParams, rep
 	if (params.oldHash && params.oldHash !== oldHash) return failure(started, repoRoot, "oldHash mismatch", [`Expected ${params.oldHash}, found ${oldHash}`]);
 	if (params.oldText !== undefined && params.oldText !== span.text) {
 		const widened = containsDeclarationLines(params.oldText, span.text)
-			? "Provided oldText contains the declaration plus surrounding lines; a contextLines read returns a wider view than replace_symbol matches. Pass oldHash, or oldText read without contextLines."
+			? "Provided oldText holds the declaration plus extra lines. A contextLines read returns that wider view, and so does a declaration that lost lines after you read it. Pass oldHash, or re-read without contextLines and compare."
 			: "Provided oldText does not exactly match the resolved current symbol text";
 		return failure(started, repoRoot, "oldText mismatch", [widened]);
 	}

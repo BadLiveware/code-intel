@@ -557,7 +557,7 @@ test("replace_symbol explains a widened oldText instead of a bare mismatch", asy
 	const result = await runCodeIntelTool("code_intel_replace_symbol", { path: "limits.ts", symbol: "LIMIT", oldText: (widened.details as any).targetSegment.source, newText: "export const LIMIT = 43;" }, env);
 
 	assert.equal((result.details as any).ok, false);
-	assert.match((result.details as any).diagnostics[0], /contextLines read returns a wider view/);
+	assert.match((result.details as any).diagnostics[0], /plus extra lines/);
 	assert.match(fs.readFileSync(path.join(repo, "limits.ts"), "utf-8"), /export const LIMIT = 42;/);
 });
 
@@ -593,7 +593,15 @@ test("the widened-oldText hint reads lines, not raw substrings", async () => {
 	fs.writeFileSync(path.join(repo, "edited.ts"), "// a comment\nconst LIMIT = 42;\n");
 	const stale = await runCodeIntelTool("code_intel_replace_symbol", { path: "edited.ts", symbol: "LIMIT", oldText: "export const LIMIT = 42;", newText: "const LIMIT = 43;" }, env);
 	assert.equal((stale.details as any).ok, false);
-	assert.doesNotMatch(hintOf(stale), /wider view/);
+	assert.doesNotMatch(hintOf(stale), /plus extra lines/);
+
+	// Context below the declaration must not hide it: the declaration's trailing newline leaves an
+	// empty line that only ever aligns at the very end of a block.
+	fs.writeFileSync(path.join(repo, "below.ts"), "// lead\nexport const LIMIT = 42;\n// trailing\n");
+	const below = (await runCodeIntelTool("code_intel_read_symbol", { path: "below.ts", symbol: "LIMIT", contextLines: 1 }, env)).details as any;
+	const belowResult = await runCodeIntelTool("code_intel_replace_symbol", { path: "below.ts", symbol: "LIMIT", oldText: below.targetSegment.source, newText: "export const LIMIT = 43;" }, env);
+	assert.equal((belowResult.details as any).ok, false);
+	assert.match(hintOf(belowResult), /plus extra lines/);
 
 	// A truncated widened read of a multi-line CRLF declaration re-joins with "\n", so a raw
 	// substring test would miss a view that genuinely is wider.
@@ -602,7 +610,7 @@ test("the widened-oldText hint reads lines, not raw substrings", async () => {
 	assert.equal(segment.targetSegment.truncated, true);
 	const crlf = await runCodeIntelTool("code_intel_replace_symbol", { path: "crlf.ts", symbol: "TABLE", oldText: segment.targetSegment.source, newText: "export const TABLE = {};" }, env);
 	assert.equal((crlf.details as any).ok, false);
-	assert.match(hintOf(crlf), /wider view/);
+	assert.match(hintOf(crlf), /plus extra lines/);
 });
 
 test("standalone registry gates mutation tools unless enabled", async () => {
